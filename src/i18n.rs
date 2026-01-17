@@ -1,0 +1,165 @@
+//! Internationalization (i18n) support.
+//!
+//! Provides compile-time language selection via Cargo features.
+
+/// Macro for internationalized strings.
+/// Returns the appropriate string based on the compile-time language feature.
+#[macro_export]
+macro_rules! t {
+    // Status messages
+    ("status_checking") => {
+        if cfg!(feature = "zh") {
+            "正在检查文件状态..."
+        } else {
+            "Checking file status..."
+        }
+    };
+    ("status_recovering") => {
+        if cfg!(feature = "zh") {
+            "正在恢复上次中断的会话..."
+        } else {
+            "Recovering from previous session..."
+        }
+    };
+    ("status_analyzing") => {
+        if cfg!(feature = "zh") {
+            "正在分析文件结构..."
+        } else {
+            "Analyzing file structure..."
+        }
+    };
+    ("status_processing") => {
+        if cfg!(feature = "zh") {
+            "正在处理数据..."
+        } else {
+            "Processing data..."
+        }
+    };
+    ("status_finalizing") => {
+        if cfg!(feature = "zh") {
+            "正在完成..."
+        } else {
+            "Finalizing..."
+        }
+    };
+
+    // User prompts
+    ("enter_password_prompt") => {
+        if cfg!(feature = "zh") {
+            "请输入密码: "
+        } else {
+            "Enter password: "
+        }
+    };
+    ("confirm_password_prompt") => {
+        if cfg!(feature = "zh") {
+            "请确认密码: "
+        } else {
+            "Confirm password: "
+        }
+    };
+
+    // Result messages
+    ("done") => {
+        if cfg!(feature = "zh") {
+            "完成"
+        } else {
+            "Done"
+        }
+    };
+    ("success_msg") => {
+        if cfg!(feature = "zh") {
+            "操作成功完成!"
+        } else {
+            "Operation completed successfully!"
+        }
+    };
+    ("fail_msg") => {
+        if cfg!(feature = "zh") {
+            "操作失败:"
+        } else {
+            "Operation failed:"
+        }
+    };
+    ("error_prefix") => {
+        if cfg!(feature = "zh") {
+            "[错误]"
+        } else {
+            "[Error]"
+        }
+    };
+
+    // Error messages
+    ("err_password_mismatch") => {
+        if cfg!(feature = "zh") {
+            "密码不匹配"
+        } else {
+            "Passwords do not match"
+        }
+    };
+    ("err_file_not_found") => {
+        if cfg!(feature = "zh") {
+            "文件未找到"
+        } else {
+            "File not found"
+        }
+    };
+
+    // Help text
+    ("help_encrypt") => {
+        if cfg!(feature = "zh") {
+            "加密媒体文件"
+        } else {
+            "Encrypt media files"
+        }
+    };
+    ("help_decrypt") => {
+        if cfg!(feature = "zh") {
+            "解密媒体文件"
+        } else {
+            "Decrypt media files"
+        }
+    };
+    ("help_recover") => {
+        if cfg!(feature = "zh") {
+            "从中断的会话中恢复"
+        } else {
+            "Recover from an interrupted session"
+        }
+    };
+    ("help_password") => {
+        if cfg!(feature = "zh") {
+            "加密/解密密码"
+        } else {
+            "Password for encryption/decryption"
+        }
+    };
+    ("help_encrypt_audio") => {
+        if cfg!(feature = "zh") {
+            "同时加密音频轨道（较慢）"
+        } else {
+            "Also encrypt audio tracks (slower)"
+        }
+    };
+    ("help_scrub_metadata") => {
+        if cfg!(feature = "zh") {
+            "清除敏感元数据（标题、GPS等）"
+        } else {
+            "Scrub sensitive metadata (title, GPS, etc.)"
+        }
+    };
+    ("help_recursive") => {
+        if cfg!(feature = "zh") {
+            "递归处理目录中的所有文件"
+        } else {
+            "Recursively process all files in directory"
+        }
+    };
+
+    // Default fallback
+    ($key:expr) => {
+        $key
+    };
+}
+
+pub use t;
