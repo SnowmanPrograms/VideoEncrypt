@@ -149,6 +149,8 @@ pub struct EncryptionConfig {
     pub scrub_metadata: bool,
     /// Operation mode.
     pub operation: OperationMode,
+    /// Disable WAL for faster (but unsafe) operation.
+    pub no_wal: bool,
 }
 
 impl Default for EncryptionConfig {
@@ -158,6 +160,7 @@ impl Default for EncryptionConfig {
             encrypt_audio: false,
             scrub_metadata: false,
             operation: OperationMode::Encrypt,
+            no_wal: false,
         }
     }
 }
@@ -272,6 +275,12 @@ impl EncryptionTask {
     /// Set the progress handler.
     pub fn with_handler(mut self, handler: Arc<dyn ProgressHandler>) -> Self {
         self.handler = Some(handler);
+        self
+    }
+
+    /// Disable WAL for faster but unsafe operation.
+    pub fn with_no_wal(mut self, enable: bool) -> Self {
+        self.config.no_wal = enable;
         self
     }
 

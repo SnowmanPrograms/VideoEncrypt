@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
-use media_lock_core::{AppError, EncryptionTask, OperationMode, ProgressHandler};
+use media_lock_core::{AppError, EncryptionTask, OperationMode, ProgressHandler, TaskStats, run_task_with_stats};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -41,6 +41,10 @@ enum Commands {
         /// Recursively process all files in directory
         #[arg(short, long)]
         recursive: bool,
+
+        /// Disable WAL for faster (but unsafe) operation
+        #[arg(long)]
+        no_wal: bool,
     },
 
     /// Decrypt media files
@@ -56,6 +60,10 @@ enum Commands {
         /// Recursively process all files in directory
         #[arg(short, long)]
         recursive: bool,
+
+        /// Disable WAL for faster (but unsafe) operation
+        #[arg(long)]
+        no_wal: bool,
     },
 
     /// Recover from an interrupted session
@@ -136,17 +144,100 @@ fn collect_files(path: &PathBuf, recursive: bool) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Format duration in human-readable form
-fn format_duration(elapsed: std::time::Duration) -> String {
-    let total_secs = elapsed.as_secs_f64();
-    if total_secs < 1.0 {
-        format!("{:.0}ms", elapsed.as_millis())
-    } else if total_secs < 60.0 {
-        format!("{:.2}s", total_secs)
+/// Format bytes in human-readable form.
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
-        let mins = (total_secs / 60.0).floor() as u64;
-        let secs = total_secs % 60.0;
-        format!("{}m {:.2}s", mins, secs)
+        format!("{} B", bytes)
+    }
+}
+
+/// Format duration in human-readable form.
+fn format_duration(d: std::time::Duration) -> String {
+    let ms = d.as_millis();
+    if ms < 1000 {
+        format!("{:.1}ms", ms as f64)
+    } else {
+        format!("{:.3}s", d.as_secs_f64())
+    }
+}
+
+/// Print detailed performance statistics.
+fn print_stats(stats: &TaskStats, file_path: &PathBuf, mode: &str) {
+    println!();
+    println!("================================================");
+    println!("{}: {}", t!("bench_complete"), file_path.file_name().unwrap_or_default().to_string_lossy());
+    println!("{}: {}", t!("bench_mode"), mode);
+    println!("------------------------------------------------");
+    println!("{}", t!("bench_perf"));
+    println!("  1. {:24} {}", t!("bench_parse_time"), format_duration(stats.parse_time));
+    println!("  2. {:24} {}", t!("bench_kdf_time"), format_duration(stats.kdf_time));
+    println!("  3. {:24} {}", t!("bench_io_time"), format_duration(stats.io_time));
+    println!("  4. {:24} {}", t!("bench_crypto_time"), format_duration(stats.crypto_time));
+    println!("  5. {:24} {}", t!("bench_total_time"), format_duration(stats.total_time));
+    println!();
+    println!("{}", t!("bench_data_stats"));
+    println!("  1. {:24} {}", t!("bench_file_size"), format_bytes(stats.file_size));
+    println!("  2. {:24} {} ({:.1}%)", t!("bench_data_size"), 
+             format_bytes(stats.data_size), stats.data_ratio_percent());
+    println!("  3. {:24} {}", t!("bench_iframe_count"), stats.iframe_count);
+    if stats.audio_count > 0 {
+        println!("  4. {:24} {}", t!("bench_audio_count"), stats.audio_count);
+    }
+    println!();
+    println!("{}", t!("bench_speed"));
+    println!("  1. {:24} {:.2} MB/s", t!("bench_crypto_throughput"), stats.crypto_throughput_mbps());
+    println!("  2. {:24} {:.2} MB/s", t!("bench_io_throughput"), stats.io_throughput_mbps());
+    println!("  3. {:24} {:.2} MB/s", t!("bench_perceived_speed"), stats.perceived_speed_mbps());
+    println!("================================================");
+}
+
+fn process_file(file_path: PathBuf, mode: OperationMode, password: String, encrypt_audio: bool, scrub_metadata: bool, no_wal: bool) {
+    println!("Processing: {}", file_path.display());
+    if no_wal {
+        println!("  [WARNING] WAL disabled - unsafe mode");
+    }
+
+    let start_time = Instant::now();
+    let handler = CliProgress::new();
+    
+    let mut task = EncryptionTask::new(file_path.clone(), mode)
+        .with_password(password)
+        .with_handler(handler)
+        .with_no_wal(no_wal);
+
+    if mode == OperationMode::Encrypt {
+        task = task.with_audio(encrypt_audio).with_metadata_scrub(scrub_metadata);
+    }
+
+    match run_task_with_stats(&task) {
+        Ok(stats) => {
+            let mode_str = if no_wal {
+                match mode {
+                    OperationMode::Encrypt => "Encrypt (I-Frame Only, No-WAL)",
+                    OperationMode::Decrypt => "Decrypt (No-WAL)",
+                    OperationMode::Recover => "Recover",
+                }
+            } else {
+                match mode {
+                    OperationMode::Encrypt => "Encrypt (I-Frame Only)",
+                    OperationMode::Decrypt => "Decrypt",
+                    OperationMode::Recover => "Recover",
+                }
+            };
+            print_stats(&stats, &file_path, mode_str);
+            println!("{} (Time: {})", t!("success_msg"), format_duration(start_time.elapsed()));
+        }
+        Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
     }
 }
 
@@ -163,6 +254,7 @@ fn main() {
             encrypt_audio,
             scrub_metadata,
             recursive,
+            no_wal,
         } => {
             let files = collect_files(&path, recursive);
 
@@ -172,9 +264,6 @@ fn main() {
             }
 
             for file_path in files {
-                println!("Processing: {}", file_path.display());
-
-                // Get password interactively if not provided
                 let pwd = password.clone().unwrap_or_else(|| {
                     rpassword::prompt_password(t!("enter_password_prompt")).unwrap_or_default()
                 });
@@ -184,21 +273,7 @@ fn main() {
                     continue;
                 }
 
-                let start_time = Instant::now();
-                let handler = CliProgress::new();
-                let task = EncryptionTask::new(file_path.clone(), OperationMode::Encrypt)
-                    .with_password(pwd)
-                    .with_audio(encrypt_audio)
-                    .with_metadata_scrub(scrub_metadata)
-                    .with_handler(handler);
-
-                match task.run() {
-                    Ok(_) => {
-                        let elapsed = start_time.elapsed();
-                        println!("{} (Time: {})", t!("success_msg"), format_duration(elapsed));
-                    }
-                    Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
-                }
+                process_file(file_path, OperationMode::Encrypt, pwd, encrypt_audio, scrub_metadata, no_wal);
             }
         }
 
@@ -206,6 +281,7 @@ fn main() {
             path,
             password,
             recursive,
+            no_wal,
         } => {
             let files = collect_files(&path, recursive);
 
@@ -215,8 +291,6 @@ fn main() {
             }
 
             for file_path in files {
-                println!("Processing: {}", file_path.display());
-
                 let pwd = password.clone().unwrap_or_else(|| {
                     rpassword::prompt_password(t!("enter_password_prompt")).unwrap_or_default()
                 });
@@ -226,19 +300,7 @@ fn main() {
                     continue;
                 }
 
-                let start_time = Instant::now();
-                let handler = CliProgress::new();
-                let task = EncryptionTask::new(file_path.clone(), OperationMode::Decrypt)
-                    .with_password(pwd)
-                    .with_handler(handler);
-
-                match task.run() {
-                    Ok(_) => {
-                        let elapsed = start_time.elapsed();
-                        println!("{} (Time: {})", t!("success_msg"), format_duration(elapsed));
-                    }
-                    Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
-                }
+                process_file(file_path, OperationMode::Decrypt, pwd, false, false, no_wal);
             }
         }
 
@@ -248,13 +310,13 @@ fn main() {
             let start_time = Instant::now();
             let handler = CliProgress::new();
             let task = EncryptionTask::new(path.clone(), OperationMode::Recover)
-                .with_password("dummy".to_string()) // Password not needed for recovery
+                .with_password("dummy".to_string())
                 .with_handler(handler);
 
-            match task.run() {
-                Ok(_) => {
-                    let elapsed = start_time.elapsed();
-                    println!("{} (Time: {})", t!("success_msg"), format_duration(elapsed));
+            match run_task_with_stats(&task) {
+                Ok(stats) => {
+                    print_stats(&stats, &path, "Recover");
+                    println!("{} (Time: {})", t!("success_msg"), format_duration(start_time.elapsed()));
                 }
                 Err(e) => eprintln!("{} {}", t!("fail_msg"), e),
             }

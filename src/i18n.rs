@@ -156,6 +156,127 @@ macro_rules! t {
         }
     };
 
+    // Benchmark output
+    ("bench_complete") => {
+        if cfg!(feature = "zh") {
+            "Benchmark 完成"
+        } else {
+            "Benchmark Complete"
+        }
+    };
+    ("bench_mode") => {
+        if cfg!(feature = "zh") {
+            "模式"
+        } else {
+            "Mode"
+        }
+    };
+    ("bench_perf") => {
+        if cfg!(feature = "zh") {
+            "[性能指标]"
+        } else {
+            "[Performance Metrics]"
+        }
+    };
+    ("bench_parse_time") => {
+        if cfg!(feature = "zh") {
+            "解析耗时 (Parse)"
+        } else {
+            "Parse Time"
+        }
+    };
+    ("bench_kdf_time") => {
+        if cfg!(feature = "zh") {
+            "密钥派生 (KDF)"
+        } else {
+            "Key Derivation (KDF)"
+        }
+    };
+    ("bench_io_time") => {
+        if cfg!(feature = "zh") {
+            "I/O 耗时 (Read+Write)"
+        } else {
+            "I/O Time (Read+Write)"
+        }
+    };
+    ("bench_crypto_time") => {
+        if cfg!(feature = "zh") {
+            "加密耗时 (Crypto)"
+        } else {
+            "Crypto Time"
+        }
+    };
+    ("bench_total_time") => {
+        if cfg!(feature = "zh") {
+            "总耗时"
+        } else {
+            "Total Time"
+        }
+    };
+    ("bench_data_stats") => {
+        if cfg!(feature = "zh") {
+            "[数据统计]"
+        } else {
+            "[Data Statistics]"
+        }
+    };
+    ("bench_file_size") => {
+        if cfg!(feature = "zh") {
+            "文件总大小"
+        } else {
+            "File Size"
+        }
+    };
+    ("bench_data_size") => {
+        if cfg!(feature = "zh") {
+            "实际加密数据量"
+        } else {
+            "Encrypted Data"
+        }
+    };
+    ("bench_iframe_count") => {
+        if cfg!(feature = "zh") {
+            "I帧(关键帧)数量"
+        } else {
+            "I-Frame Count"
+        }
+    };
+    ("bench_audio_count") => {
+        if cfg!(feature = "zh") {
+            "音频样本数量"
+        } else {
+            "Audio Sample Count"
+        }
+    };
+    ("bench_speed") => {
+        if cfg!(feature = "zh") {
+            "[速度分析]"
+        } else {
+            "[Speed Analysis]"
+        }
+    };
+    ("bench_crypto_throughput") => {
+        if cfg!(feature = "zh") {
+            "加密吞吐量"
+        } else {
+            "Crypto Throughput"
+        }
+    };
+    ("bench_io_throughput") => {
+        if cfg!(feature = "zh") {
+            "I/O 吞吐量"
+        } else {
+            "I/O Throughput"
+        }
+    };
+    ("bench_perceived_speed") => {
+        if cfg!(feature = "zh") {
+            "用户感知速度"
+        } else {
+            "Perceived Speed"
+        }
+    };
+
     // Default fallback
     ($key:expr) => {
         $key

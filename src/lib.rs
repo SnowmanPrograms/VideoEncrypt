@@ -17,3 +17,5 @@ pub mod workflow;
 // Re-export commonly used types
 pub use common::{EncryptionConfig, EncryptionTask, OperationMode, ProgressHandler, Region, RegionKind};
 pub use error::{AppError, Result};
+pub use workflow::{TaskStats, run_task_with_stats};
+
