@@ -5,6 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use media_lock_core::{AppError, EncryptionTask, OperationMode, ProgressHandler};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use walkdir::WalkDir;
 
 // Import i18n macro
@@ -135,6 +136,20 @@ fn collect_files(path: &PathBuf, recursive: bool) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Format duration in human-readable form
+fn format_duration(elapsed: std::time::Duration) -> String {
+    let total_secs = elapsed.as_secs_f64();
+    if total_secs < 1.0 {
+        format!("{:.0}ms", elapsed.as_millis())
+    } else if total_secs < 60.0 {
+        format!("{:.2}s", total_secs)
+    } else {
+        let mins = (total_secs / 60.0).floor() as u64;
+        let secs = total_secs % 60.0;
+        format!("{}m {:.2}s", mins, secs)
+    }
+}
+
 fn main() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
@@ -169,6 +184,7 @@ fn main() {
                     continue;
                 }
 
+                let start_time = Instant::now();
                 let handler = CliProgress::new();
                 let task = EncryptionTask::new(file_path.clone(), OperationMode::Encrypt)
                     .with_password(pwd)
@@ -177,7 +193,10 @@ fn main() {
                     .with_handler(handler);
 
                 match task.run() {
-                    Ok(_) => println!("{}", t!("success_msg")),
+                    Ok(_) => {
+                        let elapsed = start_time.elapsed();
+                        println!("{} (Time: {})", t!("success_msg"), format_duration(elapsed));
+                    }
                     Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
                 }
             }
@@ -207,13 +226,17 @@ fn main() {
                     continue;
                 }
 
+                let start_time = Instant::now();
                 let handler = CliProgress::new();
                 let task = EncryptionTask::new(file_path.clone(), OperationMode::Decrypt)
                     .with_password(pwd)
                     .with_handler(handler);
 
                 match task.run() {
-                    Ok(_) => println!("{}", t!("success_msg")),
+                    Ok(_) => {
+                        let elapsed = start_time.elapsed();
+                        println!("{} (Time: {})", t!("success_msg"), format_duration(elapsed));
+                    }
                     Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
                 }
             }
@@ -222,13 +245,17 @@ fn main() {
         Commands::Recover { path } => {
             println!("Recovering: {}", path.display());
 
+            let start_time = Instant::now();
             let handler = CliProgress::new();
             let task = EncryptionTask::new(path.clone(), OperationMode::Recover)
                 .with_password("dummy".to_string()) // Password not needed for recovery
                 .with_handler(handler);
 
             match task.run() {
-                Ok(_) => println!("{}", t!("success_msg")),
+                Ok(_) => {
+                    let elapsed = start_time.elapsed();
+                    println!("{} (Time: {})", t!("success_msg"), format_duration(elapsed));
+                }
                 Err(e) => eprintln!("{} {}", t!("fail_msg"), e),
             }
         }

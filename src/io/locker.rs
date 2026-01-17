@@ -70,11 +70,14 @@ impl<'de> Deserialize<'de> for OperationMode {
 /// File lock manager.
 ///
 /// Ensures only one process can modify a file at a time.
+/// Uses RAII pattern - lock is automatically released on drop.
 pub struct LockManager {
     /// Path to the lock file.
     lock_path: PathBuf,
     /// Current lock state.
     state: LockState,
+    /// Whether the lock has been explicitly released.
+    released: bool,
 }
 
 impl LockManager {
@@ -139,7 +142,7 @@ impl LockManager {
         file.write_all(json.as_bytes())?;
         file.sync_all()?;
 
-        Ok(Self { lock_path, state })
+        Ok(Self { lock_path, state, released: false })
     }
 
     /// Update the processing stage.
@@ -158,7 +161,16 @@ impl LockManager {
     }
 
     /// Release the lock.
-    pub fn release(self) -> Result<()> {
+    pub fn release(mut self) -> Result<()> {
+        self.do_release()
+    }
+
+    /// Internal release implementation.
+    fn do_release(&mut self) -> Result<()> {
+        if self.released {
+            return Ok(());
+        }
+        self.released = true;
         if self.lock_path.exists() {
             fs::remove_file(&self.lock_path)?;
         }
@@ -173,8 +185,9 @@ impl LockManager {
 
 impl Drop for LockManager {
     fn drop(&mut self) {
-        // Note: We don't auto-release on drop because we want explicit release
-        // for crash safety. The lock file should persist if the process crashes.
+        // Auto-release lock on drop using RAII pattern
+        // This ensures lock is released even if an error occurs
+        let _ = self.do_release();
     }
 }
 

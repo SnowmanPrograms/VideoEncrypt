@@ -27,8 +27,6 @@ pub struct WalEntry {
 pub struct WalManager {
     /// Path to the WAL file.
     wal_path: PathBuf,
-    /// Path to the target file.
-    target_path: PathBuf,
     /// Current batch entries (in memory).
     entries: Vec<WalEntry>,
 }
@@ -60,7 +58,6 @@ impl WalManager {
     pub fn new(target: &Path) -> Self {
         Self {
             wal_path: Self::wal_path_for(target),
-            target_path: target.to_path_buf(),
             entries: Vec::new(),
         }
     }
