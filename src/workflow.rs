@@ -1,6 +1,7 @@
 //! Core workflow orchestration.
 //!
-//! This module implements the main encryption/decryption workflow.
+//! This module implements the main encryption/decryption workflow
+//! using a 2-phase approach for crash safety with minimal I/O overhead.
 
 use crate::common::{
     EncryptionTask, FileFooter, NoOpProgress, OperationMode, ProgressHandler,
@@ -8,7 +9,7 @@ use crate::common::{
 };
 use crate::crypto::{derive_key, generate_nonce, generate_salt, CryptoEngine};
 use crate::error::{AppError, Result};
-use crate::io::{LockManager, ProcessStage, WalManager};
+use crate::io::{LockManager, ProcessStage, StreamingWal};
 use crate::parsers::detect_parser;
 use crate::t;
 
@@ -16,8 +17,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::time::{Duration, Instant};
 
-/// Default batch size for processing (16 MB).
-const BATCH_SIZE: usize = 16 * 1024 * 1024;
 
 /// Task performance statistics.
 #[derive(Debug, Clone, Default)]
@@ -36,7 +35,9 @@ pub struct TaskStats {
     pub parse_time: Duration,
     /// Time spent on key derivation (Argon2).
     pub kdf_time: Duration,
-    /// Time spent on I/O operations (read + write + sync).
+    /// Time spent on WAL operations (Phase 1).
+    pub wal_time: Duration,
+    /// Time spent on I/O operations (read + write).
     pub io_time: Duration,
     /// Time spent on encryption/decryption.
     pub crypto_time: Duration,
@@ -56,8 +57,9 @@ impl TaskStats {
 
     /// Calculate I/O throughput in MB/s.
     pub fn io_throughput_mbps(&self) -> f64 {
-        if self.io_time.as_secs_f64() > 0.0 {
-            (self.data_size as f64 / 1_000_000.0) / self.io_time.as_secs_f64()
+        let total_io = self.io_time + self.wal_time;
+        if total_io.as_secs_f64() > 0.0 {
+            (self.data_size as f64 / 1_000_000.0) / total_io.as_secs_f64()
         } else {
             0.0
         }
@@ -109,13 +111,13 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     // Check 1: File lock
     let mut locker = LockManager::acquire(path, task.config.operation)?;
 
-    // Check 2: Disaster recovery
-    if WalManager::needs_recovery(path) {
+    // Check 2: Disaster recovery (if WAL exists)
+    if StreamingWal::needs_recovery(path) {
         if task.config.operation != OperationMode::Recover {
             return Err(AppError::PreviousSessionFailed);
         }
         handler.on_message(t!("status_recovering"));
-        WalManager::recover(path)?;
+        StreamingWal::recover(path)?;
         if task.config.operation == OperationMode::Recover {
             locker.release()?;
             handler.on_finish();
@@ -192,71 +194,81 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     };
     stats.kdf_time = kdf_start.elapsed();
 
-    // 6. Batch processing
-    let batches = chunk_regions(regions, BATCH_SIZE);
     let use_wal = !task.config.no_wal;
-    let mut wal = if use_wal { Some(WalManager::new(path)) } else { None };
+
+    // =========================================================================
+    // PHASE 1: Create WAL with all backup data (sequential write, 1 sync)
+    // =========================================================================
+    if use_wal {
+        let wal_start = Instant::now();
+        let mut wal = StreamingWal::create(path)?;
+        
+        for region in &regions {
+            wal.append_region(&mut file, region)?;
+        }
+        
+        wal.finish()?; // Single sync for all WAL data
+        stats.wal_time = wal_start.elapsed();
+    }
 
     locker.update_stage(ProcessStage::Processing { current_offset: 0 })?;
 
-    for batch in batches {
-        if use_wal {
-            // Safe mode: Use WAL for crash recovery
-            let wal_ref = wal.as_mut().unwrap();
+    // =========================================================================
+    // PHASE 2: In-place encryption using Go-style pattern
+    // read -> encrypt -> seek_back -> write (per region)
+    // =========================================================================
+    let mut buffer = vec![0u8; 4 * 1024 * 1024]; // 4MB buffer like Go
+
+    // Sort regions by offset for sequential access
+    let mut sorted_regions = regions;
+    sorted_regions.sort_by_key(|r| r.offset);
+
+    for region in &sorted_regions {
+        // Seek to region start
+        file.seek(SeekFrom::Start(region.offset))?;
+        
+        let mut region_processed = 0usize;
+        while region_processed < region.len {
+            let to_read = std::cmp::min(buffer.len(), region.len - region_processed);
             
-            // A. WAL Write + Read (I/O)
+            // Read
             let io_start = Instant::now();
-            wal_ref.begin_batch(&mut file, &batch)?;
+            file.read_exact(&mut buffer[..to_read])?;
             stats.io_time += io_start.elapsed();
-
-            // B. Encrypt in RAM (Crypto)
+            
+            // Encrypt in-place
             let crypto_start = Instant::now();
-            let mut data = wal_ref.get_batch_data();
-            engine.process_regions(&batch, &mut data, task.config.scrub_metadata);
+            engine.process_buffer(
+                &mut buffer[..to_read],
+                region.offset + region_processed as u64,
+                task.config.scrub_metadata && region.kind == RegionKind::Metadata,
+            );
             stats.crypto_time += crypto_start.elapsed();
-
-            // C. Write Back + Sync (I/O)
+            
+            // Seek back and write
             let io_start = Instant::now();
-            write_batch_data(&mut file, &batch, &data)?;
-            file.sync_all()?;
+            file.seek(SeekFrom::Current(-(to_read as i64)))?;
+            file.write_all(&buffer[..to_read])?;
             stats.io_time += io_start.elapsed();
-
-            // D. Commit (I/O)
-            let io_start = Instant::now();
-            wal_ref.commit_batch()?;
-            stats.io_time += io_start.elapsed();
-        } else {
-            // Fast mode: Direct read-process-write without WAL
-            // A. Read (I/O)
-            let io_start = Instant::now();
-            let mut data = read_batch_data(&mut file, &batch)?;
-            stats.io_time += io_start.elapsed();
-
-            // B. Encrypt in RAM (Crypto)
-            let crypto_start = Instant::now();
-            engine.process_regions(&batch, &mut data, task.config.scrub_metadata);
-            stats.crypto_time += crypto_start.elapsed();
-
-            // C. Write Back (I/O) - no sync per batch
-            let io_start = Instant::now();
-            write_batch_data(&mut file, &batch, &data)?;
-            stats.io_time += io_start.elapsed();
+            
+            region_processed += to_read;
         }
-
-        // E. Update progress
-        let batch_bytes: u64 = batch.iter().map(|r| r.len as u64).sum();
-        handler.on_progress(batch_bytes);
+        
+        handler.on_progress(region.len as u64);
     }
 
-    // 7. Finalize
+    // =========================================================================
+    // FINALIZATION: Single sync + cleanup
+    // =========================================================================
     handler.on_message(t!("status_finalizing"));
     locker.update_stage(ProcessStage::Finalizing)?;
 
-    // Final sync for no-wal mode
-    if !use_wal {
-        file.sync_all()?;
-    }
+    // Single sync for all encrypted data
+    let io_start = Instant::now();
+    file.sync_all()?;
+    stats.io_time += io_start.elapsed();
 
+    // Append/remove footer
     match task.config.operation {
         OperationMode::Encrypt => {
             append_footer(&mut file, salt, nonce)?;
@@ -267,9 +279,9 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         OperationMode::Recover => {}
     }
 
-    // 8. Release lock
-    if let Some(ref w) = wal {
-        w.cleanup()?;
+    // Cleanup WAL and release lock
+    if use_wal {
+        StreamingWal::cleanup(path)?;
     }
     locker.release()?;
     
@@ -340,6 +352,7 @@ fn remove_footer(file: &mut File) -> Result<()> {
 }
 
 /// Split regions into batches of approximately the given size.
+#[allow(dead_code)] // Used by tests
 fn chunk_regions(regions: Vec<Region>, max_batch_size: usize) -> Vec<Vec<Region>> {
     let mut batches = Vec::new();
     let mut current_batch = Vec::new();
@@ -361,34 +374,6 @@ fn chunk_regions(regions: Vec<Region>, max_batch_size: usize) -> Vec<Vec<Region>
     }
 
     batches
-}
-
-/// Write processed data back to the file.
-fn write_batch_data(file: &mut File, regions: &[Region], data: &[u8]) -> Result<()> {
-    let mut data_offset = 0usize;
-
-    for region in regions {
-        file.seek(SeekFrom::Start(region.offset))?;
-        file.write_all(&data[data_offset..data_offset + region.len])?;
-        data_offset += region.len;
-    }
-
-    Ok(())
-}
-
-/// Read batch data from file (for no-WAL mode).
-fn read_batch_data(file: &mut File, regions: &[Region]) -> Result<Vec<u8>> {
-    let total_len: usize = regions.iter().map(|r| r.len).sum();
-    let mut data = Vec::with_capacity(total_len);
-    
-    for region in regions {
-        file.seek(SeekFrom::Start(region.offset))?;
-        let mut buf = vec![0u8; region.len];
-        file.read_exact(&mut buf)?;
-        data.extend_from_slice(&buf);
-    }
-    
-    Ok(data)
 }
 
 #[cfg(test)]

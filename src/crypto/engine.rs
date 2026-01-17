@@ -96,6 +96,22 @@ impl CryptoEngine {
             data_offset += region.len;
         }
     }
+
+    /// Process a buffer directly at the given global offset.
+    ///
+    /// This is used for Go-style direct read-encrypt-write pattern.
+    ///
+    /// # Arguments
+    /// * `data` - Mutable buffer to encrypt/decrypt in-place.
+    /// * `global_offset` - Byte offset from the start of the file.
+    /// * `scrub` - If true, fill with spaces instead of encrypting.
+    pub fn process_buffer(&self, data: &mut [u8], global_offset: u64, scrub: bool) {
+        if scrub {
+            data.fill(0x20); // UTF-8 safe space
+        } else {
+            self.process_block(global_offset, data);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -181,9 +181,16 @@ fn print_stats(stats: &TaskStats, file_path: &PathBuf, mode: &str) {
     println!("{}", t!("bench_perf"));
     println!("  1. {:24} {}", t!("bench_parse_time"), format_duration(stats.parse_time));
     println!("  2. {:24} {}", t!("bench_kdf_time"), format_duration(stats.kdf_time));
-    println!("  3. {:24} {}", t!("bench_io_time"), format_duration(stats.io_time));
-    println!("  4. {:24} {}", t!("bench_crypto_time"), format_duration(stats.crypto_time));
-    println!("  5. {:24} {}", t!("bench_total_time"), format_duration(stats.total_time));
+    if stats.wal_time.as_millis() > 0 {
+        println!("  3. {:24} {}", "WAL Backup (Phase 1)", format_duration(stats.wal_time));
+        println!("  4. {:24} {}", t!("bench_io_time"), format_duration(stats.io_time));
+        println!("  5. {:24} {}", t!("bench_crypto_time"), format_duration(stats.crypto_time));
+        println!("  6. {:24} {}", t!("bench_total_time"), format_duration(stats.total_time));
+    } else {
+        println!("  3. {:24} {}", t!("bench_io_time"), format_duration(stats.io_time));
+        println!("  4. {:24} {}", t!("bench_crypto_time"), format_duration(stats.crypto_time));
+        println!("  5. {:24} {}", t!("bench_total_time"), format_duration(stats.total_time));
+    }
     println!();
     println!("{}", t!("bench_data_stats"));
     println!("  1. {:24} {}", t!("bench_file_size"), format_bytes(stats.file_size));

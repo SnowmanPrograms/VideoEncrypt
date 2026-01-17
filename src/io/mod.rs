@@ -6,4 +6,5 @@ mod locker;
 mod wal;
 
 pub use locker::{LockManager, LockState, ProcessStage};
-pub use wal::WalManager;
+pub use wal::StreamingWal;
+
