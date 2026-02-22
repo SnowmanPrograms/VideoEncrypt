@@ -1,3 +1,8 @@
+import { en } from "@/lib/i18n";
+
+export type Translations = typeof en;
+export type Locale = "en" | "zh";
+
 export interface FileInfo {
   path: string;
   name: string;

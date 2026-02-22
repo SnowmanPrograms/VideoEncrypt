@@ -1,86 +1,162 @@
 # Media Lock GUI
 
-Tauri 2.0 + React + TypeScript + shadcn/ui 桌面应用
+A modern desktop application for video encryption, built with **Tauri 2.0**, **React 19**, **TypeScript**, and **shadcn/ui**, and **Zustand**.
 
-## 开发环境
+## Features
 
-### 前置要求
+- **Modern UI**: Clean interface with shadcn/ui components
+- **Theme Support**: Light, Dark, and System modes
+- **Internationalization**: English and Chinese with runtime switching
+- **Real-time Progress**: Live progress updates during encryption/decryption
+- **Batch Processing**: Process multiple files or folders
+- **Task Management**: Cancel running tasks
+
+## Development
+
+### Prerequisites
 - Node.js 18+
 - Rust (latest stable)
 - pnpm/npm/yarn
 
-### 安装依赖
+### Setup
 
 ```bash
 cd gui
 npm install
 ```
 
-### 开发模式
+### Development Mode
 
 ```bash
 npm run tauri dev
 ```
 
-### 构建发布
+### Production Build
 
 ```bash
 npm run tauri build
 ```
 
-## 项目结构
+## Project Structure
 
 ```
 gui/
-├── src/                      # React 前端
-│   ├── components/           # UI 组件
-│   │   ├── ui/               # shadcn/ui 基础组件
-│   │   ├── FileList.tsx      # 文件列表
-│   │   ├── TaskConfigPanel.tsx # 配置面板
-│   │   └── ProgressPanel.tsx  # 进度面板
-│   ├── hooks/                # React hooks
-│   │   └── useTaskProgress.ts # 进度监听
-│   ├── lib/                  # 工具库
-│   │   ├── tauri.ts          # Tauri API 封装
-│   │   └── utils.ts          # 通用工具
-│   ├── stores/               # 状态管理
-│   │   └── appStore.ts       # Zustand store
-│   ├── types/                # TypeScript 类型
-│   │   └── index.ts
-│   ├── App.tsx               # 主应用
-│   ├── main.tsx              # 入口
-│   └── index.css             # Tailwind 样式
-├── src-tauri/                # Tauri Rust 后端
+├── src/                          # React frontend
+│   ├── components/              # UI components
+│   │   ├── ui/                # shadcn/ui base components
+│   │   ├── FileList.tsx       # File list with status badges
+│   │   ├── TaskConfigPanel.tsx # Encryption configuration
+│   │   ├── ProgressPanel.tsx  # Real-time progress
+│   │   ├── ThemeProvider.tsx  # Theme management
+│   │   ├── ThemeSwitcher.tsx  # Theme toggle button
+│   │   └── LanguageSwitcher.tsx # Language toggle button
+│   ├── hooks/                   # React hooks
+│   │   └── useTaskProgress.ts # Tauri event listener
+│   ├── lib/                    # Utilities
+│   │   ├── i18n.ts           # Translation files (en/zh)
+│   │   ├── i18nStore.ts      # i18n Zustand store
+│   │   ├── tauri.ts           # Tauri API wrappers
+│   │   └── utils.ts           # Formatting utilities
+│   ├── stores/                  # State management
+│   │   └── appStore.ts         # Main app store (Zustand + persist)
+│   ├── types/                   # TypeScript types
+│   │   └── index.ts            # Shared type definitions
+│   ├── App.tsx                  # Main application component
+│   ├── main.tsx                # Application entry point
+│   └── index.css                # Tailwind CSS styles
+├── src-tauri/                    # Tauri Rust backend
 │   ├── src/
-│   │   ├── commands.rs       # Tauri 命令
-│   │   ├── task_manager.rs   # 任务管理
-│   │   ├── progress.rs       # 进度桥接
-│   │   ├── error.rs          # 错误类型
-│   │   ├── lib.rs            # 库入口
-│   │   └── main.rs           # 程序入口
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── package.json
-├── vite.config.ts
-├── tailwind.config.js
-└── tsconfig.json
+│   │   ├── commands.rs          # Tauri IPC commands
+│   │   ├── task_manager.rs     # Task execution engine
+│   │   ├── progress.rs         # Progress handler bridge
+│   │   ├── error.rs             # Error types
+│   │   ├── lib.rs               # Library entry
+│   │   └── main.rs              # Binary entry
+│   ├── Cargo.toml               # Rust dependencies
+│   ├── tauri.conf.json         # Tauri configuration
+│   ├── capabilities/            # Tauri permissions
+│   └── icons/                  # Application icons
+├── package.json                  # Node dependencies
+├── vite.config.ts                # Vite configuration
+├── tailwind.config.js            # Tailwind configuration
+├── tsconfig.json                 # TypeScript configuration
+└── components.json              # shadcn/ui configuration
 ```
 
-## 架构亮点
+## Architecture Highlights
 
-### 1. 直接调用核心库
-- Tauri commands 直接调用 `media_lock_core`
-- 无需 IPC/CLI 开销，性能最优
+### Direct Core Library Integration
+- Tauri commands call `media_lock_core` directly
+- No IPC/CLI overhead
+- Optimal performance
 
-### 2. 实时进度同步
-- `ProgressHandler` trait 实现
-- Tauri 事件系统向前端推送进度
+### Real-time Progress Sync
+- `ProgressHandler` trait implementation
+- Tauri event system for frontend updates
+- Live throughput statistics
 
-### 3. 类型安全
-- Rust ↔ TypeScript 类型自动同步
-- 前端完整的类型定义
+### Type Safety
+- Shared TypeScript type definitions
+- Rust types mirrored in frontend
+- Full IDE autocomplete
 
-### 4. 任务管理
-- 支持批量文件处理
-- 异步任务执行
-- 任务取消功能
+### State Management
+- Zustand with persist middleware
+- Settings saved to localStorage
+- Theme, language, and preferences persisted
+
+## Configuration
+
+### Theme Options
+- **Light**: Light color scheme
+- **Dark**: Dark color scheme  
+- **System**: Follows OS preference
+
+### Language Options
+- **English**: Default language
+- **Chinese**: Full translation
+
+### Encryption Options
+- **Encrypt Audio**: Also encrypt audio tracks (slower)
+- **Scrub Metadata**: Remove GPS, titles, etc.
+- **Crash Safety (WAL)**: Enable write-ahead logging
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start Vite dev server |
+| `npm run build` | Build frontend |
+| `npm run tauri dev` | Start Tauri in development mode |
+| `npm run tauri build` | Build production binaries |
+
+## Dependencies
+
+### Frontend
+- React 19
+- TypeScript
+- Vite 6
+- Tailwind CSS 4
+- shadcn/ui
+- Zustand 5
+- Radix UI primitives
+- Lucide React icons
+
+### Backend
+- Tauri 2.0
+- Rust 2021 edition
+- media_lock_core (workspace member)
+
+## Building for Production
+
+```bash
+# Build MSI installer
+npm run tauri build
+
+# Output location
+gui/src-tauri/target/release/bundle/
+```
+
+## License
+
+MIT License - see LICENSE file for details

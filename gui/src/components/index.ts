@@ -7,3 +7,6 @@ export { Switch } from "./ui/switch";
 export { FileList } from "./FileList";
 export { TaskConfigPanel } from "./TaskConfigPanel";
 export { ProgressPanel } from "./ProgressPanel";
+export { ThemeProvider } from "./ThemeProvider";
+export { LanguageSwitcher } from "./LanguageSwitcher";
+export { ThemeSwitcher } from "./ThemeSwitcher";

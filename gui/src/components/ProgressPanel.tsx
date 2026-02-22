@@ -1,21 +1,25 @@
 import { useAppStore } from "@/stores/appStore";
+import { useI18n, t } from "@/stores/i18nStore";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
-import { formatBytes, formatDuration } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import { cancelTask } from "@/lib/tauri";
-import { X, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
+import { X, CheckCircle, AlertCircle } from "lucide-react";
+import type { ProgressPhase } from "@/types";
 
-function PhaseIndicator({ phase }: { phase: string }) {
-  const phases: Record<string, { label: string; color: string }> = {
-    Checking: { label: "Checking file...", color: "text-blue-500" },
-    Analyzing: { label: "Analyzing structure...", color: "text-purple-500" },
-    Backup: { label: "Creating backup...", color: "text-yellow-500" },
-    Processing: { label: "Processing data...", color: "text-primary" },
-    Finalizing: { label: "Finalizing...", color: "text-green-500" },
-    Completed: { label: "Completed", color: "text-green-500" },
-    Failed: { label: "Failed", color: "text-destructive" },
-    Cancelled: { label: "Cancelled", color: "text-orange-500" },
-    Idle: { label: "Ready", color: "text-muted-foreground" },
+function PhaseIndicator({ phase }: { phase: ProgressPhase }) {
+  const i18n = useI18n((s) => s.t);
+  
+  const phases: Record<ProgressPhase, { label: string; color: string }> = {
+    Checking: { label: i18n.progress.checking, color: "text-blue-500" },
+    Analyzing: { label: i18n.progress.analyzing, color: "text-purple-500" },
+    Backup: { label: i18n.progress.backup, color: "text-yellow-500" },
+    Processing: { label: i18n.progress.processing, color: "text-primary" },
+    Finalizing: { label: i18n.progress.finalizing, color: "text-green-500" },
+    Completed: { label: i18n.progress.completed, color: "text-green-500" },
+    Failed: { label: i18n.progress.failed, color: "text-destructive" },
+    Cancelled: { label: i18n.progress.cancelled, color: "text-orange-500" },
+    Idle: { label: i18n.progress.idle, color: "text-muted-foreground" },
   };
 
   const info = phases[phase] || phases.Idle;
@@ -24,6 +28,7 @@ function PhaseIndicator({ phase }: { phase: string }) {
 }
 
 export function ProgressPanel() {
+  const i18n = useI18n((s) => s.t);
   const progress = useAppStore((state) => state.progress);
   const currentTask = useAppStore((state) => state.currentTask);
   const isProcessing = useAppStore((state) => state.isProcessing);
@@ -51,7 +56,7 @@ export function ProgressPanel() {
         {isProcessing && (
           <Button variant="ghost" size="sm" onClick={handleCancel}>
             <X className="h-4 w-4 mr-1" />
-            Cancel
+            {i18n.progress.cancel}
           </Button>
         )}
       </div>
@@ -75,13 +80,18 @@ export function ProgressPanel() {
       {progress?.stats && (
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="text-muted-foreground">
-            I-Frames: <span className="font-medium text-foreground">{progress.stats.iframe_count}</span>
+            {i18n.progress.iframes}:{" "}
+            <span className="font-medium text-foreground">{progress.stats.iframe_count}</span>
           </div>
           <div className="text-muted-foreground">
-            Audio: <span className="font-medium text-foreground">{progress.stats.audio_count}</span>
+            {i18n.progress.audio}:{" "}
+            <span className="font-medium text-foreground">{progress.stats.audio_count}</span>
           </div>
           <div className="text-muted-foreground">
-            Speed: <span className="font-medium text-foreground">{progress.stats.throughput_mbps.toFixed(2)} MB/s</span>
+            {i18n.progress.speed}:{" "}
+            <span className="font-medium text-foreground">
+              {progress.stats.throughput_mbps.toFixed(2)} MB/s
+            </span>
           </div>
         </div>
       )}
@@ -101,7 +111,7 @@ export function ProgressPanel() {
             <AlertCircle className="h-5 w-5 text-destructive" />
           )}
           <Button variant="outline" size="sm" onClick={reset}>
-            Start New Task
+            {i18n.progress.newTask}
           </Button>
         </div>
       )}

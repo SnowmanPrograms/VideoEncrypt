@@ -1,4 +1,5 @@
 import { useAppStore } from "@/stores/appStore";
+import { useI18n, t } from "@/stores/i18nStore";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/utils";
 import { FileVideo, Lock, Unlock, Trash2, AlertCircle } from "lucide-react";
@@ -17,6 +18,7 @@ function FileStateIcon({ state }: { state: FileState }) {
 }
 
 function FileStateBadge({ state }: { state: FileState }) {
+  const i18n = useI18n((s) => s.t);
   const colors: Record<FileState, string> = {
     Normal: "bg-muted text-muted-foreground",
     Encrypted: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
@@ -26,7 +28,7 @@ function FileStateBadge({ state }: { state: FileState }) {
 
   return (
     <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[state]}`}>
-      {state}
+      {i18n.file.status[state]}
     </span>
   );
 }
@@ -40,8 +42,8 @@ export function FileList() {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
         <FileVideo className="h-12 w-12 mb-4 opacity-50" />
-        <p>No files selected</p>
-        <p className="text-sm">Select files or a folder to get started</p>
+        <p>{t("file.noFiles")}</p>
+        <p className="text-sm">{t("file.selectHint")}</p>
       </div>
     );
   }
@@ -50,10 +52,10 @@ export function FileList() {
     <div className="space-y-2">
       <div className="flex items-center justify-between mb-4">
         <span className="text-sm text-muted-foreground">
-          {files.length} file{files.length !== 1 ? "s" : ""} selected
+          {t("file.selected", { count: files.length })}
         </span>
         <Button variant="ghost" size="sm" onClick={clearFiles}>
-          Clear All
+          {t("file.clearAll")}
         </Button>
       </div>
 
@@ -79,7 +81,7 @@ export function FileList() {
             <Button
               variant="ghost"
               size="icon"
-              className="opacity-0 group-hover:opacity-100 transition-opacity"
+              className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8"
               onClick={() => removeFile(file.path)}
             >
               <Trash2 className="h-4 w-4 text-destructive" />

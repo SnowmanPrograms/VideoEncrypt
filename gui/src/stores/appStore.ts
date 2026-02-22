@@ -1,7 +1,11 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type { FileInfo, TaskInfo, TaskMode, ProgressEvent } from "@/types";
 
+export type Theme = "light" | "dark" | "system";
+
 interface AppState {
+  theme: Theme;
   files: FileInfo[];
   taskMode: TaskMode;
   password: string;
@@ -13,6 +17,7 @@ interface AppState {
   progress: ProgressEvent | null;
   isProcessing: boolean;
 
+  setTheme: (theme: Theme) => void;
   setFiles: (files: FileInfo[]) => void;
   addFiles: (files: FileInfo[]) => void;
   removeFile: (path: string) => void;
@@ -29,9 +34,10 @@ interface AppState {
   reset: () => void;
 }
 
-const initialState = {
+const initialState: AppState = {
+  theme: "system",
   files: [],
-  taskMode: "Encrypt" as TaskMode,
+  taskMode: "Encrypt",
   password: "",
   confirmPassword: "",
   encryptAudio: false,
@@ -40,31 +46,70 @@ const initialState = {
   currentTask: null,
   progress: null,
   isProcessing: false,
+  setTheme: () => {},
+  setFiles: () => {},
+  addFiles: () => {},
+  removeFile: () => {},
+  clearFiles: () => {},
+  setTaskMode: () => {},
+  setPassword: () => {},
+  setConfirmPassword: () => {},
+  setEncryptAudio: () => {},
+  setScrubMetadata: () => {},
+  setUseWal: () => {},
+  setCurrentTask: () => {},
+  setProgress: () => {},
+  setIsProcessing: () => {},
+  reset: () => {},
 };
 
-export const useAppStore = create<AppState>((set) => ({
-  ...initialState,
+export const useAppStore = create<AppState>()(
+  persist(
+    (set, get) => ({
+      ...initialState,
 
-  setFiles: (files) => set({ files }),
-  addFiles: (files) =>
-    set((state) => {
-      const existingPaths = new Set(state.files.map((f) => f.path));
-      const newFiles = files.filter((f) => !existingPaths.has(f.path));
-      return { files: [...state.files, ...newFiles] };
+      setTheme: (theme) => set({ theme }),
+      setFiles: (files) => set({ files }),
+      addFiles: (files) =>
+        set((state) => {
+          const existingPaths = new Set(state.files.map((f) => f.path));
+          const newFiles = files.filter((f) => !existingPaths.has(f.path));
+          return { files: [...state.files, ...newFiles] };
+        }),
+      removeFile: (path) =>
+        set((state) => ({
+          files: state.files.filter((f) => f.path !== path),
+        })),
+      clearFiles: () => set({ files: [] }),
+      setTaskMode: (taskMode) => set({ taskMode }),
+      setPassword: (password) => set({ password }),
+      setConfirmPassword: (confirmPassword) => set({ confirmPassword }),
+      setEncryptAudio: (encryptAudio) => set({ encryptAudio }),
+      setScrubMetadata: (scrubMetadata) => set({ scrubMetadata }),
+      setUseWal: (useWal) => set({ useWal }),
+      setCurrentTask: (currentTask) => set({ currentTask }),
+      setProgress: (progress) => set({ progress }),
+      setIsProcessing: (isProcessing) => set({ isProcessing }),
+      reset: () =>
+        set({
+          files: [],
+          taskMode: "Encrypt",
+          password: "",
+          confirmPassword: "",
+          currentTask: null,
+          progress: null,
+          isProcessing: false,
+        }),
     }),
-  removeFile: (path) =>
-    set((state) => ({
-      files: state.files.filter((f) => f.path !== path),
-    })),
-  clearFiles: () => set({ files: [] }),
-  setTaskMode: (taskMode) => set({ taskMode }),
-  setPassword: (password) => set({ password }),
-  setConfirmPassword: (confirmPassword) => set({ confirmPassword }),
-  setEncryptAudio: (encryptAudio) => set({ encryptAudio }),
-  setScrubMetadata: (scrubMetadata) => set({ scrubMetadata }),
-  setUseWal: (useWal) => set({ useWal }),
-  setCurrentTask: (currentTask) => set({ currentTask }),
-  setProgress: (progress) => set({ progress }),
-  setIsProcessing: (isProcessing) => set({ isProcessing }),
-  reset: () => set(initialState),
-}));
+    {
+      name: "media-lock-settings",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        theme: state.theme,
+        encryptAudio: state.encryptAudio,
+        scrubMetadata: state.scrubMetadata,
+        useWal: state.useWal,
+      }),
+    }
+  )
+);

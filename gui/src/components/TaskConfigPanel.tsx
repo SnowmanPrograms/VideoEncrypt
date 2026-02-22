@@ -1,4 +1,5 @@
 import { useAppStore } from "@/stores/appStore";
+import { useI18n, t } from "@/stores/i18nStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,6 +10,7 @@ import { FolderOpen, FileUp, Lock, Unlock, Loader2 } from "lucide-react";
 import type { TaskMode } from "@/types";
 
 export function TaskConfigPanel() {
+  const i18n = useI18n((s) => s.t);
   const {
     files,
     addFiles,
@@ -85,7 +87,7 @@ export function TaskConfigPanel() {
           disabled={isProcessing}
         >
           <FileUp className="h-4 w-4 mr-2" />
-          Select Files
+          {i18n.button.selectFiles}
         </Button>
         <Button
           variant="outline"
@@ -94,13 +96,13 @@ export function TaskConfigPanel() {
           disabled={isProcessing}
         >
           <FolderOpen className="h-4 w-4 mr-2" />
-          Select Folder
+          {i18n.button.selectFolder}
         </Button>
       </div>
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Operation Mode</CardTitle>
+          <CardTitle className="text-base">{i18n.config.mode}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex gap-2">
@@ -111,7 +113,7 @@ export function TaskConfigPanel() {
               disabled={isProcessing}
             >
               <Lock className="h-4 w-4 mr-2" />
-              Encrypt
+              {i18n.config.encrypt}
             </Button>
             <Button
               variant={taskMode === "Decrypt" ? "default" : "outline"}
@@ -120,7 +122,7 @@ export function TaskConfigPanel() {
               disabled={isProcessing}
             >
               <Unlock className="h-4 w-4 mr-2" />
-              Decrypt
+              {i18n.config.decrypt}
             </Button>
           </div>
         </CardContent>
@@ -128,26 +130,26 @@ export function TaskConfigPanel() {
 
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
+          <Label htmlFor="password">{i18n.config.password}</Label>
           <Input
             id="password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter password"
+            placeholder={i18n.config.passwordPlaceholder}
             disabled={isProcessing}
           />
         </div>
 
         {taskMode === "Encrypt" && (
           <div className="space-y-2">
-            <Label htmlFor="confirm-password">Confirm Password</Label>
+            <Label htmlFor="confirm-password">{i18n.config.confirmPassword}</Label>
             <Input
               id="confirm-password"
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm password"
+              placeholder={i18n.config.confirmPlaceholder}
               disabled={isProcessing}
               className={
                 confirmPassword && password !== confirmPassword
@@ -156,7 +158,7 @@ export function TaskConfigPanel() {
               }
             />
             {confirmPassword && password !== confirmPassword && (
-              <p className="text-xs text-destructive">Passwords do not match</p>
+              <p className="text-xs text-destructive">{i18n.config.passwordMismatch}</p>
             )}
           </div>
         )}
@@ -165,14 +167,14 @@ export function TaskConfigPanel() {
       {taskMode === "Encrypt" && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Encryption Options</CardTitle>
+            <CardTitle className="text-base">{i18n.config.options}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
-                <Label htmlFor="encrypt-audio">Encrypt Audio</Label>
+                <Label htmlFor="encrypt-audio">{i18n.config.encryptAudio}</Label>
                 <p className="text-xs text-muted-foreground">
-                  Also encrypt audio tracks (slower)
+                  {i18n.config.encryptAudioHint}
                 </p>
               </div>
               <Switch
@@ -185,9 +187,9 @@ export function TaskConfigPanel() {
 
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
-                <Label htmlFor="scrub-metadata">Scrub Metadata</Label>
+                <Label htmlFor="scrub-metadata">{i18n.config.scrubMetadata}</Label>
                 <p className="text-xs text-muted-foreground">
-                  Remove sensitive metadata (GPS, titles)
+                  {i18n.config.scrubMetadataHint}
                 </p>
               </div>
               <Switch
@@ -203,9 +205,9 @@ export function TaskConfigPanel() {
 
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
-          <Label htmlFor="use-wal">Crash Safety (WAL)</Label>
+          <Label htmlFor="use-wal">{i18n.config.crashSafety}</Label>
           <p className="text-xs text-muted-foreground">
-            Enable write-ahead logging for crash recovery
+            {i18n.config.crashSafetyHint}
           </p>
         </div>
         <Switch
@@ -225,21 +227,17 @@ export function TaskConfigPanel() {
         {isProcessing ? (
           <>
             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            Processing...
+            {i18n.config.processing}
+          </>
+        ) : taskMode === "Encrypt" ? (
+          <>
+            <Lock className="h-4 w-4 mr-2" />
+            {i18n.config.startEncrypt}
           </>
         ) : (
           <>
-            {taskMode === "Encrypt" ? (
-              <>
-                <Lock className="h-4 w-4 mr-2" />
-                Start Encryption
-              </>
-            ) : (
-              <>
-                <Unlock className="h-4 w-4 mr-2" />
-                Start Decryption
-              </>
-            )}
+            <Unlock className="h-4 w-4 mr-2" />
+            {i18n.config.startDecrypt}
           </>
         )}
       </Button>
