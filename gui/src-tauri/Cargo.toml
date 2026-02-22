@@ -1,0 +1,30 @@
+[package]
+name = "media-lock-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "GUI application for Media Lock encryption tool"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+media-lock = { path = "../.." }
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+uuid = { version = "1.6", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+walkdir = "2.4"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

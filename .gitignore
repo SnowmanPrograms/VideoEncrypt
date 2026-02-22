@@ -21,3 +21,13 @@ Thumbs.db
 
 # Test artifacts
 /temp_test/
+
+# GUI (Node.js / Tauri)
+gui/node_modules/
+gui/dist/
+gui/package-lock.json
+gui/.vite/
+
+# Tauri build
+gui/src-tauri/target/
+gui/src-tauri/gen/
