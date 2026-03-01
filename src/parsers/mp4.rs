@@ -481,8 +481,6 @@ fn get_sample_offset(track: &TrackInfo, sample_num: u32) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_mp4_detect() {
         // Test detection logic
