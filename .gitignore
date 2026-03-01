@@ -25,7 +25,6 @@ Thumbs.db
 # GUI (Node.js / Tauri)
 gui/node_modules/
 gui/dist/
-gui/package-lock.json
 gui/.vite/
 
 # Tauri build
