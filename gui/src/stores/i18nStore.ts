@@ -1,13 +1,12 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
-import type { Locale, Translations } from "@/lib/i18n";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { en, zh } from "@/lib/i18n";
 
-const translations: Record<Locale, Translations> = { en, zh };
+export type Locale = "en" | "zh";
 
 interface I18nState {
   locale: Locale;
-  t: Translations;
+  t: typeof en;
   setLocale: (locale: Locale) => void;
 }
 
@@ -19,11 +18,12 @@ export const useI18n = create<I18nState>()(
       setLocale: (locale) =>
         set({
           locale,
-          t: translations[locale],
+          t: locale === "zh" ? (zh as unknown as typeof en) : en,
         }),
     }),
     {
       name: "media-lock-locale",
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ locale: state.locale }),
     }
   )

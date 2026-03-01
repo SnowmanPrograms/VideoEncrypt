@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useAppStore } from "@/stores/appStore";
 import { useI18n } from "@/stores/i18nStore";
@@ -14,7 +13,6 @@ import { Lock } from "lucide-react";
 function AppContent() {
   useTaskProgress();
   const i18n = useI18n((s) => s.t);
-  const isProcessing = useAppStore((state) => state.isProcessing);
 
   return (
     <div className="flex flex-col h-screen">

@@ -1,5 +1,5 @@
 import { useAppStore } from "@/stores/appStore";
-import { useI18n, t } from "@/stores/i18nStore";
+import { useI18n } from "@/stores/i18nStore";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/utils";

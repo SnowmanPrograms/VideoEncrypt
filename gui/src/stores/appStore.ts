@@ -34,39 +34,20 @@ interface AppState {
   reset: () => void;
 }
 
-const initialState: AppState = {
-  theme: "system",
-  files: [],
-  taskMode: "Encrypt",
-  password: "",
-  confirmPassword: "",
-  encryptAudio: false,
-  scrubMetadata: false,
-  useWal: true,
-  currentTask: null,
-  progress: null,
-  isProcessing: false,
-  setTheme: () => {},
-  setFiles: () => {},
-  addFiles: () => {},
-  removeFile: () => {},
-  clearFiles: () => {},
-  setTaskMode: () => {},
-  setPassword: () => {},
-  setConfirmPassword: () => {},
-  setEncryptAudio: () => {},
-  setScrubMetadata: () => {},
-  setUseWal: () => {},
-  setCurrentTask: () => {},
-  setProgress: () => {},
-  setIsProcessing: () => {},
-  reset: () => {},
-};
-
 export const useAppStore = create<AppState>()(
   persist(
-    (set, get) => ({
-      ...initialState,
+    (set) => ({
+      theme: "system",
+      files: [],
+      taskMode: "Encrypt",
+      password: "",
+      confirmPassword: "",
+      encryptAudio: false,
+      scrubMetadata: false,
+      useWal: true,
+      currentTask: null,
+      progress: null,
+      isProcessing: false,
 
       setTheme: (theme) => set({ theme }),
       setFiles: (files) => set({ files }),

@@ -1,5 +1,5 @@
 import { useAppStore } from "@/stores/appStore";
-import { useI18n, t } from "@/stores/i18nStore";
+import { useI18n } from "@/stores/i18nStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,7 +7,6 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { selectFiles, selectFolder, startTask } from "@/lib/tauri";
 import { FolderOpen, FileUp, Lock, Unlock, Loader2 } from "lucide-react";
-import type { TaskMode } from "@/types";
 
 export function TaskConfigPanel() {
   const i18n = useI18n((s) => s.t);
