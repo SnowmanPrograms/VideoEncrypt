@@ -50,7 +50,7 @@ export function ProgressPanel() {
       : 0;
 
   return (
-    <div className="space-y-4 p-4 border rounded-lg bg-card">
+    <div className="space-y-3 p-3 border rounded-lg bg-card">
       <div className="flex items-center justify-between">
         <PhaseIndicator phase={progress?.phase || "Idle"} />
         {isProcessing && (

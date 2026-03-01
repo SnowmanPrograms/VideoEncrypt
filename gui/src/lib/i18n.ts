@@ -55,6 +55,11 @@ export const en = {
     audio: "Audio",
     speed: "Speed",
   },
+  status: {
+    files: "Files",
+    totalSize: "Total Size",
+    ready: "Ready",
+  },
   button: {
     selectFiles: "Select Files",
     selectFolder: "Select Folder",
@@ -121,6 +126,11 @@ export const zh = {
     iframes: "I帧",
     audio: "音频",
     speed: "速度",
+  },
+  status: {
+    files: "文件",
+    totalSize: "总大小",
+    ready: "就绪",
   },
   button: {
     selectFiles: "选择文件",

@@ -4,24 +4,68 @@ import { useI18n } from "@/stores/i18nStore";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { FileList } from "@/components/FileList";
 import { TaskConfigPanel } from "@/components/TaskConfigPanel";
-import { ProgressPanel } from "@/components/ProgressPanel";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Lock } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
+import { selectFiles, selectFolder, cancelTask } from "@/lib/tauri";
+import { formatBytes } from "@/lib/utils";
+import { Lock, Unlock, FileUp, FolderOpen, X } from "lucide-react";
 
 function AppContent() {
   useTaskProgress();
   const i18n = useI18n((s) => s.t);
+  const {
+    addFiles,
+    taskMode,
+    setTaskMode,
+    isProcessing,
+    progress,
+    currentTask,
+    files,
+  } = useAppStore();
+
+  const handleSelectFiles = async () => {
+    try {
+      const selectedFiles = await selectFiles(false);
+      addFiles(selectedFiles);
+    } catch (e) {
+      console.error("Failed to select files:", e);
+    }
+  };
+
+  const handleSelectFolder = async () => {
+    try {
+      const selectedFiles = await selectFolder(true);
+      addFiles(selectedFiles);
+    } catch (e) {
+      console.error("Failed to select folder:", e);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (currentTask?.id) {
+      await cancelTask(currentTask.id);
+    }
+  };
+
+  const progressPercent =
+    progress?.total_bytes && progress.total_bytes > 0
+      ? (progress.processed_bytes / progress.total_bytes) * 100
+      : 0;
+
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0);
 
   return (
     <div className="flex flex-col h-screen">
       <header className="border-b bg-card">
-        <div className="container flex items-center justify-between py-4">
+        {/* Row 1: Logo + Title + Settings */}
+        <div className="flex items-center justify-between px-4 py-2 border-b">
           <div className="flex items-center gap-2">
-            <Lock className="h-6 w-6 text-primary" />
-            <h1 className="text-xl font-bold">{i18n.app.title}</h1>
-            <span className="text-xs text-muted-foreground ml-2">
+            <Lock className="h-5 w-5 text-primary" />
+            <h1 className="text-base font-bold">{i18n.app.title}</h1>
+            <span className="text-xs text-muted-foreground ml-1">
               {i18n.app.subtitle}
             </span>
           </div>
@@ -30,39 +74,117 @@ function AppContent() {
             <ThemeSwitcher />
           </div>
         </div>
-      </header>
 
-      <main className="flex-1 container py-6 overflow-auto">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>{i18n.file.title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <FileList />
-              </CardContent>
-            </Card>
+        {/* Row 2: Toolbar */}
+        <div className="flex items-center gap-2 px-4 py-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSelectFiles}
+            disabled={isProcessing}
+          >
+            <FileUp className="h-3.5 w-3.5 mr-1.5" />
+            {i18n.button.selectFiles}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSelectFolder}
+            disabled={isProcessing}
+          >
+            <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
+            {i18n.button.selectFolder}
+          </Button>
 
-            <ProgressPanel />
-          </div>
+          <Separator orientation="vertical" className="h-6 mx-1" />
 
-          <div>
-            <Card>
-              <CardHeader>
-                <CardTitle>{i18n.config.title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <TaskConfigPanel />
-              </CardContent>
-            </Card>
+          <div className="flex gap-1">
+            <Button
+              variant={taskMode === "Encrypt" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setTaskMode("Encrypt")}
+              disabled={isProcessing}
+            >
+              <Lock className="h-3.5 w-3.5 mr-1.5" />
+              {i18n.config.encrypt}
+            </Button>
+            <Button
+              variant={taskMode === "Decrypt" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setTaskMode("Decrypt")}
+              disabled={isProcessing}
+            >
+              <Unlock className="h-3.5 w-3.5 mr-1.5" />
+              {i18n.config.decrypt}
+            </Button>
           </div>
         </div>
-      </main>
+      </header>
 
-      <footer className="border-t bg-card py-3">
-        <div className="container text-center text-sm text-muted-foreground">
-          {i18n.app.footer}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Main Content Area */}
+        <main className="flex-1 flex flex-col px-4 py-3 overflow-auto">
+          <div className="flex-1">
+            <FileList />
+          </div>
+        </main>
+
+        {/* Sidebar: Configuration Panel */}
+        <aside className="w-72 border-l bg-muted/30 p-3 overflow-y-auto">
+          <h2 className="text-sm font-semibold mb-3">{i18n.config.title}</h2>
+          <TaskConfigPanel />
+        </aside>
+      </div>
+
+      <footer className="border-t bg-card py-2 px-4">
+        <div className="flex items-center justify-between text-xs">
+          <div className="flex items-center gap-4">
+            <span>{i18n.status.files}: {files.length}</span>
+            <span>{i18n.status.totalSize}: {formatBytes(totalSize)}</span>
+            {isProcessing && progress && (
+              <>
+                <Separator orientation="vertical" className="h-4" />
+                <span className="text-primary font-medium">
+                  {progress.phase}
+                </span>
+                {progress.current_file && (
+                  <span className="text-muted-foreground truncate max-w-xs">
+                    {progress.current_file}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            {isProcessing && progress && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">
+                    {formatBytes(progress.processed_bytes)} / {formatBytes(progress.total_bytes)}
+                  </span>
+                  <span className="font-medium">{progressPercent.toFixed(1)}%</span>
+                </div>
+                <Progress value={progressPercent} className="w-32 h-2" />
+                {progress.stats && (
+                  <span className="text-muted-foreground">
+                    {progress.stats.throughput_mbps.toFixed(2)} MB/s
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleCancel}
+                  className="h-6 px-2"
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </>
+            )}
+            {!isProcessing && (
+              <span className="text-muted-foreground">{i18n.status.ready}</span>
+            )}
+          </div>
         </div>
       </footer>
     </div>

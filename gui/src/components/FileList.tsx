@@ -2,18 +2,26 @@ import { useAppStore } from "@/stores/appStore";
 import { useI18n, t } from "@/stores/i18nStore";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/utils";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { FileVideo, Lock, Unlock, Trash2, AlertCircle } from "lucide-react";
 import type { FileState } from "@/types";
 
 function FileStateIcon({ state }: { state: FileState }) {
   switch (state) {
     case "Encrypted":
-      return <Lock className="h-4 w-4 text-green-500" />;
+      return <Lock className="h-3.5 w-3.5 text-green-500" />;
     case "Locked":
     case "RecoveryNeeded":
-      return <AlertCircle className="h-4 w-4 text-yellow-500" />;
+      return <AlertCircle className="h-3.5 w-3.5 text-yellow-500" />;
     default:
-      return <Unlock className="h-4 w-4 text-muted-foreground" />;
+      return <Unlock className="h-3.5 w-3.5 text-muted-foreground" />;
   }
 }
 
@@ -27,7 +35,7 @@ function FileStateBadge({ state }: { state: FileState }) {
   };
 
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[state]}`}>
+    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${colors[state]}`}>
       {i18n.file.status[state]}
     </span>
   );
@@ -40,54 +48,68 @@ export function FileList() {
 
   if (files.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-        <FileVideo className="h-12 w-12 mb-4 opacity-50" />
-        <p>{t("file.noFiles")}</p>
-        <p className="text-sm">{t("file.selectHint")}</p>
+      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+        <FileVideo className="h-10 w-10 mb-3 opacity-50" />
+        <p className="text-sm">{t("file.noFiles")}</p>
+        <p className="text-xs">{t("file.selectHint")}</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-sm text-muted-foreground">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
           {t("file.selected", { count: files.length })}
         </span>
-        <Button variant="ghost" size="sm" onClick={clearFiles}>
+        <Button variant="ghost" size="sm" onClick={clearFiles} className="h-7 text-xs">
           {t("file.clearAll")}
         </Button>
       </div>
 
-      <div className="max-h-64 overflow-y-auto space-y-1">
-        {files.map((file) => (
-          <div
-            key={file.path}
-            className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors group"
-          >
-            <FileVideo className="h-5 w-5 text-primary shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium truncate">{file.name}</span>
-                <FileStateIcon state={file.state} />
-              </div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs text-muted-foreground">
+      <div className="border rounded-lg overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8"></TableHead>
+              <TableHead>文件名</TableHead>
+              <TableHead className="w-20">大小</TableHead>
+              <TableHead className="w-24">状态</TableHead>
+              <TableHead className="w-10"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {files.map((file) => (
+              <TableRow key={file.path}>
+                <TableCell>
+                  <FileVideo className="h-3.5 w-3.5 text-primary" />
+                </TableCell>
+                <TableCell className="font-medium">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm">{file.name}</span>
+                    <FileStateIcon state={file.state} />
+                  </div>
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
                   {formatBytes(file.size)}
-                </span>
-                <FileStateBadge state={file.state} />
-              </div>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8"
-              onClick={() => removeFile(file.path)}
-            >
-              <Trash2 className="h-4 w-4 text-destructive" />
-            </Button>
-          </div>
-        ))}
+                </TableCell>
+                <TableCell>
+                  <FileStateBadge state={file.state} />
+                </TableCell>
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => removeFile(file.path)}
+                  >
+                    <Trash2 className="h-3 w-3 text-destructive" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </div>
     </div>
   );

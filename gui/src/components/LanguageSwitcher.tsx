@@ -1,5 +1,11 @@
 import { useI18n } from "@/stores/i18nStore";
-import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Languages } from "lucide-react";
 
 export function LanguageSwitcher() {
@@ -7,14 +13,15 @@ export function LanguageSwitcher() {
   const setLocale = useI18n((state) => state.setLocale);
 
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={() => setLocale(locale === "en" ? "zh" : "en")}
-      className="gap-2"
-    >
-      <Languages className="h-4 w-4" />
-      <span className="text-xs">{locale === "en" ? "中文" : "EN"}</span>
-    </Button>
+    <Select value={locale} onValueChange={(value) => setLocale(value as "en" | "zh")}>
+      <SelectTrigger className="w-[130px] h-8">
+        <Languages className="h-3.5 w-3.5 mr-1.5" />
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="en">English</SelectItem>
+        <SelectItem value="zh">中文</SelectItem>
+      </SelectContent>
+    </Select>
   );
 }

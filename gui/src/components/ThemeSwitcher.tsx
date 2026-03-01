@@ -1,29 +1,49 @@
 import { useAppStore, type Theme } from "@/stores/appStore";
-import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Sun, Moon, Monitor } from "lucide-react";
 
-const themeIcons: Record<Theme, React.ReactNode> = {
-  light: <Sun className="h-4 w-4" />,
-  dark: <Moon className="h-4 w-4" />,
-  system: <Monitor className="h-4 w-4" />,
+const themeConfig: Record<Theme, { icon: React.ReactNode; label: string }> = {
+  light: { icon: <Sun className="h-3.5 w-3.5" />, label: "Light" },
+  dark: { icon: <Moon className="h-3.5 w-3.5" />, label: "Dark" },
+  system: { icon: <Monitor className="h-3.5 w-3.5" />, label: "System" },
 };
-
-const themes: Theme[] = ["light", "dark", "system"];
 
 export function ThemeSwitcher() {
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);
 
-  const cycleTheme = () => {
-    const currentIndex = themes.indexOf(theme);
-    const nextIndex = (currentIndex + 1) % themes.length;
-    setTheme(themes[nextIndex]);
-  };
-
   return (
-    <Button variant="ghost" size="sm" onClick={cycleTheme} className="gap-2">
-      {themeIcons[theme]}
-      <span className="text-xs capitalize">{theme}</span>
-    </Button>
+    <Select value={theme} onValueChange={(value) => setTheme(value as Theme)}>
+      <SelectTrigger className="w-[120px] h-8">
+        {themeConfig[theme].icon}
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="light">
+          <div className="flex items-center gap-2">
+            <Sun className="h-3.5 w-3.5" />
+            <span>Light</span>
+          </div>
+        </SelectItem>
+        <SelectItem value="dark">
+          <div className="flex items-center gap-2">
+            <Moon className="h-3.5 w-3.5" />
+            <span>Dark</span>
+          </div>
+        </SelectItem>
+        <SelectItem value="system">
+          <div className="flex items-center gap-2">
+            <Monitor className="h-3.5 w-3.5" />
+            <span>System</span>
+          </div>
+        </SelectItem>
+      </SelectContent>
+    </Select>
   );
 }
