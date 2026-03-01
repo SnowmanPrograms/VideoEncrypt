@@ -108,18 +108,8 @@ jobs:
 
   build-gui:
     name: Build GUI
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     needs: test
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - os: macos-latest
-            target: x86_64-apple-darwin
 
     steps:
     - name: Checkout code
@@ -129,7 +119,6 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: stable
-        target: ${{ matrix.target }}
 
     - name: Install Node.js
       uses: actions/setup-node@v4
@@ -171,5 +160,5 @@ jobs:
     - name: Upload GUI artifact
       uses: actions/upload-artifact@v4
       with:
-        name: media-lock-gui-${{ runner.os }}
+        name: media-lock-gui-windows
         path: gui/src-tauri/target/release/bundle/
