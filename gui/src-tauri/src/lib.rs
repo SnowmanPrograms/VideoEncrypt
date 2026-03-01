@@ -3,6 +3,7 @@ pub mod error;
 pub mod progress;
 pub mod task_manager;
 
+#[allow(unused_imports)]
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -22,6 +23,8 @@ pub fn run() {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
             }
+            #[cfg(not(debug_assertions))]
+            let _ = app;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
