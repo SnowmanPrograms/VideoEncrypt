@@ -63,6 +63,10 @@ fn ebml_vint_1byte(value: u64) -> [u8; 1] {
     [(0x80u8 | (value as u8))]
 }
 
+fn ebml_uint_1byte(value: u8) -> [u8; 1] {
+    [value]
+}
+
 /// Minimal MKV fixture that the bundled parser can scan.
 ///
 /// Layout:
@@ -92,7 +96,7 @@ fn minimal_mkv_fixture() -> (Vec<u8>, u64, usize) {
     // TrackNumber = 1
     bytes.push(0xD7);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
-    bytes.extend_from_slice(&ebml_vint_1byte(1));
+    bytes.extend_from_slice(&ebml_uint_1byte(1));
     // TrackType = video(1)
     bytes.push(0x83);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
@@ -104,7 +108,7 @@ fn minimal_mkv_fixture() -> (Vec<u8>, u64, usize) {
     // TrackNumber = 2
     bytes.push(0xD7);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
-    bytes.extend_from_slice(&ebml_vint_1byte(2));
+    bytes.extend_from_slice(&ebml_uint_1byte(2));
     // TrackType = audio(2)
     bytes.push(0x83);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
@@ -149,7 +153,7 @@ fn minimal_mkv_fixture_with_audio() -> (Vec<u8>, u64, usize, u64, usize) {
     bytes.extend_from_slice(&ebml_vint_1byte(6));
     bytes.push(0xD7);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
-    bytes.extend_from_slice(&ebml_vint_1byte(1));
+    bytes.extend_from_slice(&ebml_uint_1byte(1));
     bytes.push(0x83);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
     bytes.push(1);
@@ -159,7 +163,7 @@ fn minimal_mkv_fixture_with_audio() -> (Vec<u8>, u64, usize, u64, usize) {
     bytes.extend_from_slice(&ebml_vint_1byte(6));
     bytes.push(0xD7);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
-    bytes.extend_from_slice(&ebml_vint_1byte(2));
+    bytes.extend_from_slice(&ebml_uint_1byte(2));
     bytes.push(0x83);
     bytes.extend_from_slice(&ebml_vint_1byte(1));
     bytes.push(2);

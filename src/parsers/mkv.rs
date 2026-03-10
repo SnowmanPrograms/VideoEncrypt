@@ -69,12 +69,14 @@ impl ContainerParser for MkvParser {
         }
 
         // Find Segment
-        let segment_start = find_element_after(reader, SEGMENT_ID, file_size)?
+        let (segment_start, _segment_size) = find_element_after_with_size(reader, SEGMENT_ID, file_size)?
             .ok_or_else(|| AppError::InvalidStructure("No Segment found".to_string()))?;
 
         // Parse Tracks to identify video/audio track numbers
-        let tracks = if let Some(tracks_pos) = find_element_in_segment(reader, TRACKS_ID, segment_start, file_size)? {
-            parse_tracks(reader, tracks_pos)?
+        let tracks = if let Some((tracks_pos, tracks_size)) =
+            find_element_in_segment(reader, TRACKS_ID, segment_start, file_size)?
+        {
+            parse_tracks(reader, tracks_pos, tracks_size)?
         } else {
             Vec::new()
         };
@@ -101,7 +103,7 @@ impl ContainerParser for MkvParser {
                 Ok((id, size)) => {
                     if id == CLUSTER_ID {
                         // Parse cluster for blocks
-                        let cluster_end = reader.stream_position()? + size;
+                        let cluster_end = (reader.stream_position()? + size).min(file_size);
                         scan_cluster(
                             reader,
                             cluster_end,
@@ -207,15 +209,19 @@ fn read_ebml_element_header(reader: &mut BufReader<File>) -> Result<(u32, u64)> 
     Ok((id, size))
 }
 
-/// Find an element starting after current position.
-fn find_element_after(reader: &mut BufReader<File>, target_id: u32, limit: u64) -> Result<Option<u64>> {
+/// Find an element starting after current position, returning (data_start, data_size).
+fn find_element_after_with_size(
+    reader: &mut BufReader<File>,
+    target_id: u32,
+    limit: u64,
+) -> Result<Option<(u64, u64)>> {
     while reader.stream_position()? < limit {
         let pos = reader.stream_position()?;
 
         match read_ebml_element_header(reader) {
             Ok((id, size)) => {
                 if id == target_id {
-                    return Ok(Some(reader.stream_position()?));
+                    return Ok(Some((reader.stream_position()?, size)));
                 }
                 let next = reader.stream_position()? + size;
                 if next > limit {
@@ -239,23 +245,21 @@ fn find_element_in_segment(
     target_id: u32,
     segment_start: u64,
     file_size: u64,
-) -> Result<Option<u64>> {
+) -> Result<Option<(u64, u64)>> {
     reader.seek(SeekFrom::Start(segment_start))?;
-    find_element_after(reader, target_id, file_size)
+    find_element_after_with_size(reader, target_id, file_size)
 }
 
 /// Parse the Tracks element to get track information.
-fn parse_tracks(reader: &mut BufReader<File>, tracks_start: u64) -> Result<Vec<TrackInfo>> {
+fn parse_tracks(reader: &mut BufReader<File>, tracks_start: u64, tracks_size: u64) -> Result<Vec<TrackInfo>> {
     let mut tracks = Vec::new();
 
-    // Read Tracks element size
     reader.seek(SeekFrom::Start(tracks_start))?;
 
-    // We're already past the header, need to figure out the end
-    // For simplicity, we'll scan for TrackEntry elements
     let file_size = get_file_size(reader)?;
+    let tracks_end = tracks_start.saturating_add(tracks_size).min(file_size);
 
-    while reader.stream_position()? < file_size {
+    while reader.stream_position()? < tracks_end {
         let pos = reader.stream_position()?;
 
         match read_ebml_element_header(reader) {
@@ -269,7 +273,7 @@ fn parse_tracks(reader: &mut BufReader<File>, tracks_start: u64) -> Result<Vec<T
                     break;
                 } else {
                     let next = reader.stream_position()? + size;
-                    if next > file_size {
+                    if next > tracks_end {
                         break;
                     }
                     reader.seek(SeekFrom::Start(next))?;
@@ -286,6 +290,24 @@ fn parse_tracks(reader: &mut BufReader<File>, tracks_start: u64) -> Result<Vec<T
     Ok(tracks)
 }
 
+/// Read an EBML unsigned integer (big-endian) of the given size.
+fn read_ebml_uint(reader: &mut impl Read, size: u64) -> Result<u64> {
+    if size == 0 {
+        return Err(AppError::InvalidStructure("Invalid EBML uint size: 0".to_string()));
+    }
+    if size > 8 {
+        return Err(AppError::InvalidStructure(format!(
+            "Invalid EBML uint size: {}",
+            size
+        )));
+    }
+
+    let mut buf = [0u8; 8];
+    let start = (8 - size) as usize;
+    reader.read_exact(&mut buf[start..])?;
+    Ok(u64::from_be_bytes(buf))
+}
+
 /// Parse a TrackEntry element.
 fn parse_track_entry(reader: &mut BufReader<File>, entry_size: u64) -> Result<Option<TrackInfo>> {
     let entry_end = reader.stream_position()? + entry_size;
@@ -298,11 +320,16 @@ fn parse_track_entry(reader: &mut BufReader<File>, entry_size: u64) -> Result<Op
         match read_ebml_element_header(reader) {
             Ok((id, size)) => {
                 if id == TRACK_NUMBER_ID {
-                    track_number = Some(read_vint(reader)?);
+                    track_number = Some(read_ebml_uint(reader, size)?);
                 } else if id == TRACK_TYPE_ID {
-                    let mut buf = [0u8; 1];
-                    reader.read_exact(&mut buf)?;
-                    track_type = Some(buf[0]);
+                    let value = read_ebml_uint(reader, size)?;
+                    if value > u8::MAX as u64 {
+                        return Err(AppError::InvalidStructure(format!(
+                            "Invalid TrackType value: {}",
+                            value
+                        )));
+                    }
+                    track_type = Some(value as u8);
                 } else {
                     let next = reader.stream_position()? + size;
                     reader.seek(SeekFrom::Start(next.min(entry_end)))?;
