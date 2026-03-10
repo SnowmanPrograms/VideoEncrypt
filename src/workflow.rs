@@ -5,13 +5,16 @@
 
 use crate::common::{
     EncryptionTask, FileFooter, NoOpProgress, OperationMode, ProgressHandler,
-    Region, RegionKind, FOOTER_MAGIC,
+    Region, RegionKind, FOOTER_FLAG_AUDIO, FOOTER_FLAG_SCRUB_METADATA, FOOTER_MAGIC, FOOTER_VERSION,
 };
-use crate::crypto::{derive_key, generate_nonce, generate_salt, CryptoEngine};
+use crate::crypto::{derive_keys, generate_nonce, generate_salt, CryptoEngine};
 use crate::error::{AppError, Result};
 use crate::io::{LockManager, ProcessStage, StreamingWal};
 use crate::parsers::detect_parser;
 use crate::t;
+
+use blake2::digest::Mac;
+use blake2::Blake2sMac256;
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
@@ -126,6 +129,13 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         }
     }
 
+    if task.config.operation == OperationMode::Recover {
+        locker.release()?;
+        handler.on_finish();
+        stats.total_time = total_start.elapsed();
+        return Ok(stats);
+    }
+
     // Get password
     let password = task
         .config
@@ -140,6 +150,21 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     let file_state = detect_file_state(&mut file)?;
     validate_state(file_state, task.config.operation)?;
 
+    let footer = match task.config.operation {
+        OperationMode::Decrypt => Some(read_footer(&mut file)?),
+        OperationMode::Encrypt => None,
+        OperationMode::Recover => None,
+    };
+
+    let (scan_encrypt_audio, scan_scrub_metadata) = match task.config.operation {
+        OperationMode::Encrypt => (task.config.encrypt_audio, task.config.scrub_metadata),
+        OperationMode::Decrypt => {
+            let f = footer.as_ref().ok_or(AppError::NotEncrypted)?;
+            (f.encrypt_audio(), f.scrub_metadata())
+        }
+        OperationMode::Recover => unreachable!(),
+    };
+
     // 3. Parse structure
     handler.on_message(t!("status_analyzing"));
 
@@ -147,12 +172,15 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     let file_for_parsing = File::open(path)?;
     let mut reader = BufReader::new(file_for_parsing);
     let parser = detect_parser(path)?;
-    let regions = parser.scan_regions(
+    let mut regions = parser.scan_regions(
         &mut reader,
-        task.config.encrypt_audio,
-        task.config.scrub_metadata,
+        scan_encrypt_audio,
+        scan_scrub_metadata,
     )?;
     stats.parse_time = parse_start.elapsed();
+
+    // Sort regions by offset for deterministic processing/MAC.
+    regions.sort_by_key(|r| r.offset);
 
     // Count region types
     for region in &regions {
@@ -164,11 +192,15 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     }
 
     if regions.is_empty() {
-        handler.on_message("No regions found to process");
-        locker.release()?;
-        handler.on_finish();
-        stats.total_time = total_start.elapsed();
-        return Ok(stats);
+        let msg = "No regions found to process";
+        handler.on_message(msg);
+        if task.config.operation == OperationMode::Encrypt {
+            locker.release()?;
+            handler.on_finish();
+            stats.total_time = total_start.elapsed();
+            return Ok(stats);
+        }
+        return Err(AppError::InvalidStructure(msg.to_string()));
     }
 
     // 4. Calculate total work
@@ -178,37 +210,116 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
 
     // 5. Setup crypto (KDF)
     let kdf_start = Instant::now();
-    let (salt, nonce, engine) = match task.config.operation {
-        OperationMode::Encrypt => {
-            let salt = generate_salt();
-            let nonce = generate_nonce();
-            let key = derive_key(password, &salt)?;
-            (salt, nonce, CryptoEngine::new(key, nonce))
-        }
-        OperationMode::Decrypt => {
-            let footer = read_footer(&mut file)?;
-            let key = derive_key(password, &footer.salt)?;
-            (footer.salt, footer.nonce, CryptoEngine::new(key, footer.nonce))
-        }
-        OperationMode::Recover => unreachable!(),
-    };
+    let (salt, nonce, keys, engine, footer_flags, expected_auth_tag, original_len, scrub_metadata) =
+        match task.config.operation {
+            OperationMode::Encrypt => {
+                let salt = generate_salt();
+                let nonce = generate_nonce();
+                let keys = derive_keys(password, &salt)?;
+                let engine = CryptoEngine::new(keys.enc_key, nonce);
+
+                let mut flags = 0u8;
+                if task.config.encrypt_audio {
+                    flags |= FOOTER_FLAG_AUDIO;
+                }
+                if task.config.scrub_metadata {
+                    flags |= FOOTER_FLAG_SCRUB_METADATA;
+                }
+
+                (salt, nonce, keys, engine, flags, None, stats.file_size, task.config.scrub_metadata)
+            }
+            OperationMode::Decrypt => {
+                let footer = footer.as_ref().ok_or(AppError::NotEncrypted)?;
+                let keys = derive_keys(password, &footer.salt)?;
+                let engine = CryptoEngine::new(keys.enc_key, footer.nonce);
+                (
+                    footer.salt,
+                    footer.nonce,
+                    keys,
+                    engine,
+                    footer.flags,
+                    Some(footer.auth_tag),
+                    footer.original_len,
+                    footer.scrub_metadata(),
+                )
+            }
+            OperationMode::Recover => unreachable!(),
+        };
     stats.kdf_time = kdf_start.elapsed();
 
     let use_wal = !task.config.no_wal;
 
     // =========================================================================
-    // PHASE 1: Create WAL with all backup data (sequential write, 1 sync)
+    // PHASE 1: Verify auth tag (Decrypt) and/or create WAL backup (sequential write, 1 sync)
     // =========================================================================
-    if use_wal {
-        let wal_start = Instant::now();
-        let mut wal = StreamingWal::create(path)?;
-        
-        for region in &regions {
-            wal.append_region(&mut file, region)?;
+    let mut buffer = vec![0u8; 4 * 1024 * 1024]; // 4MB buffer like Go
+
+    match task.config.operation {
+        OperationMode::Encrypt => {
+            if use_wal {
+                let wal_start = Instant::now();
+                let mut wal = StreamingWal::create(path)?;
+
+                for region in &regions {
+                    wal.append_region(&mut file, region)?;
+                }
+
+                wal.finish()?; // Single sync for all WAL data
+                stats.wal_time = wal_start.elapsed();
+            }
         }
-        
-        wal.finish()?; // Single sync for all WAL data
-        stats.wal_time = wal_start.elapsed();
+        OperationMode::Decrypt => {
+            let expected_tag = expected_auth_tag.ok_or_else(|| {
+                AppError::InvalidStructure("Missing authentication tag".to_string())
+            })?;
+
+            let mut mac = auth_mac_init(&keys.mac_key, footer_flags, &salt, &nonce, original_len)?;
+
+            if use_wal {
+                let wal_start = Instant::now();
+                let mut wal = StreamingWal::create(path)?;
+
+                for region in &regions {
+                    auth_mac_update_region(&mut mac, region);
+                    wal.append_region_with_tap(&mut file, region, |data| {
+                        mac.update(data);
+                    })?;
+                }
+
+                let computed_tag = auth_mac_finalize(mac);
+                if computed_tag != expected_tag {
+                    drop(wal);
+                    let _ = StreamingWal::cleanup(path);
+                    return Err(AppError::AuthenticationFailed);
+                }
+
+                wal.finish()?; // Single sync for all WAL data
+                stats.wal_time = wal_start.elapsed();
+            } else {
+                // No-WAL mode: verify before any writes to avoid corrupting the file on wrong password.
+                for region in &regions {
+                    auth_mac_update_region(&mut mac, region);
+
+                    file.seek(SeekFrom::Start(region.offset))?;
+                    let mut processed = 0usize;
+                    while processed < region.len {
+                        let to_read = std::cmp::min(buffer.len(), region.len - processed);
+                        let io_start = Instant::now();
+                        file.read_exact(&mut buffer[..to_read])?;
+                        stats.io_time += io_start.elapsed();
+
+                        mac.update(&buffer[..to_read]);
+                        processed += to_read;
+                    }
+                }
+
+                let computed_tag = auth_mac_finalize(mac);
+                if computed_tag != expected_tag {
+                    return Err(AppError::AuthenticationFailed);
+                }
+            }
+        }
+        OperationMode::Recover => unreachable!(),
     }
 
     locker.update_stage(ProcessStage::Processing { current_offset: 0 })?;
@@ -217,13 +328,17 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     // PHASE 2: In-place encryption using Go-style pattern
     // read -> encrypt -> seek_back -> write (per region)
     // =========================================================================
-    let mut buffer = vec![0u8; 4 * 1024 * 1024]; // 4MB buffer like Go
+    let mut auth_mac = match task.config.operation {
+        OperationMode::Encrypt => Some(auth_mac_init(&keys.mac_key, footer_flags, &salt, &nonce, original_len)?),
+        OperationMode::Decrypt => None,
+        OperationMode::Recover => None,
+    };
 
-    // Sort regions by offset for sequential access
-    let mut sorted_regions = regions;
-    sorted_regions.sort_by_key(|r| r.offset);
+    for region in &regions {
+        if let Some(mac) = auth_mac.as_mut() {
+            auth_mac_update_region(mac, region);
+        }
 
-    for region in &sorted_regions {
         // Seek to region start
         file.seek(SeekFrom::Start(region.offset))?;
         
@@ -241,9 +356,13 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
             engine.process_buffer(
                 &mut buffer[..to_read],
                 region.offset + region_processed as u64,
-                task.config.scrub_metadata && region.kind == RegionKind::Metadata,
+                scrub_metadata && region.kind == RegionKind::Metadata,
             );
             stats.crypto_time += crypto_start.elapsed();
+
+            if let Some(mac) = auth_mac.as_mut() {
+                mac.update(&buffer[..to_read]);
+            }
             
             // Seek back and write
             let io_start = Instant::now();
@@ -256,6 +375,8 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         
         handler.on_progress(region.len as u64);
     }
+
+    let auth_tag = auth_mac.map(auth_mac_finalize);
 
     // =========================================================================
     // FINALIZATION: Single sync + cleanup
@@ -271,10 +392,11 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     // Append/remove footer
     match task.config.operation {
         OperationMode::Encrypt => {
-            append_footer(&mut file, salt, nonce)?;
+            let tag = auth_tag.ok_or_else(|| AppError::Crypto("Missing authentication tag".to_string()))?;
+            append_footer(&mut file, footer_flags, salt, nonce, original_len, tag)?;
         }
         OperationMode::Decrypt => {
-            remove_footer(&mut file)?;
+            remove_footer(&mut file, original_len)?;
         }
         OperationMode::Recover => {}
     }
@@ -326,14 +448,23 @@ fn read_footer(file: &mut File) -> Result<FileFooter> {
 }
 
 /// Append the encryption footer to the file.
-fn append_footer(file: &mut File, salt: [u8; 16], nonce: [u8; 8]) -> Result<()> {
-    let original_len = file.seek(SeekFrom::End(0))?;
+fn append_footer(
+    file: &mut File,
+    flags: u8,
+    salt: [u8; 16],
+    nonce: [u8; 8],
+    original_len: u64,
+    auth_tag: [u8; 32],
+) -> Result<()> {
+    let actual_len = file.seek(SeekFrom::End(0))?;
+    if actual_len != original_len {
+        return Err(AppError::InvalidStructure(format!(
+            "File size changed during processing: expected {}, got {}",
+            original_len, actual_len
+        )));
+    }
 
-    let mut checksum = [0u8; 32];
-    file.seek(SeekFrom::Start(0))?;
-    let _ = file.read(&mut checksum);
-
-    let footer = FileFooter::new(salt, nonce, original_len, checksum);
+    let footer = FileFooter::new(flags, salt, nonce, original_len, auth_tag);
     let footer_bytes = footer.to_bytes();
 
     file.seek(SeekFrom::End(0))?;
@@ -344,11 +475,54 @@ fn append_footer(file: &mut File, salt: [u8; 16], nonce: [u8; 8]) -> Result<()> 
 }
 
 /// Remove the encryption footer from the file.
-fn remove_footer(file: &mut File) -> Result<()> {
-    let footer = read_footer(file)?;
-    file.set_len(footer.original_len)?;
+fn remove_footer(file: &mut File, original_len: u64) -> Result<()> {
+    file.set_len(original_len)?;
     file.sync_all()?;
     Ok(())
+}
+
+const AUTH_CONTEXT: &[u8] = b"media-lock-auth-v2";
+
+fn region_kind_id(kind: RegionKind) -> u8 {
+    match kind {
+        RegionKind::VideoIFrame => 1,
+        RegionKind::AudioSample => 2,
+        RegionKind::Metadata => 3,
+    }
+}
+
+fn auth_mac_init(
+    mac_key: &[u8; 32],
+    flags: u8,
+    salt: &[u8; 16],
+    nonce: &[u8; 8],
+    original_len: u64,
+) -> Result<Blake2sMac256> {
+    let mut mac = Blake2sMac256::new_from_slice(mac_key)
+        .map_err(|_| AppError::Crypto("Invalid MAC key".to_string()))?;
+
+    mac.update(AUTH_CONTEXT);
+    mac.update(&FOOTER_MAGIC);
+    mac.update(&[FOOTER_VERSION]);
+    mac.update(&[flags]);
+    mac.update(salt);
+    mac.update(nonce);
+    mac.update(&original_len.to_be_bytes());
+
+    Ok(mac)
+}
+
+fn auth_mac_update_region(mac: &mut Blake2sMac256, region: &Region) {
+    mac.update(&region.offset.to_be_bytes());
+    mac.update(&(region.len as u64).to_be_bytes());
+    mac.update(&[region_kind_id(region.kind)]);
+}
+
+fn auth_mac_finalize(mac: Blake2sMac256) -> [u8; 32] {
+    let bytes = mac.finalize().into_bytes();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    out
 }
 
 /// Split regions into batches of approximately the given size.

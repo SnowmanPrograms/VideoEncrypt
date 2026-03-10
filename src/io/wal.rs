@@ -84,10 +84,27 @@ impl StreamingWal {
     ///
     /// Reads the original data from `source_file` and writes it to WAL.
     pub fn append_region(&mut self, source_file: &mut File, region: &Region) -> Result<()> {
+        self.append_region_with_tap(source_file, region, |_| {})
+    }
+
+    /// Append a region's backup data to the WAL and optionally "tap" the bytes.
+    ///
+    /// This is useful for computing a MAC while streaming the backup.
+    pub fn append_region_with_tap<F>(
+        &mut self,
+        source_file: &mut File,
+        region: &Region,
+        mut tap: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8]),
+    {
         // Read original data from source file
         source_file.seek(SeekFrom::Start(region.offset))?;
         let mut data = vec![0u8; region.len];
         source_file.read_exact(&mut data)?;
+
+        tap(&data);
 
         // Write entry: offset + length + data
         self.writer.write_u64::<BigEndian>(region.offset)?;

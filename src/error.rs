@@ -11,6 +11,9 @@ pub enum AppError {
     #[error("Invalid password")]
     InvalidPassword,
 
+    #[error("Authentication failed (wrong password or corrupted file)")]
+    AuthenticationFailed,
+
     #[error("File is already encrypted")]
     AlreadyEncrypted,
 

@@ -37,6 +37,7 @@ byteorder = "1.5"
 aes = "0.8"
 ctr = "0.9"
 argon2 = "0.5"
+blake2 = "0.10"
 rand = "0.8"
 clap = { version = "4.4", features = ["derive"] }
 indicatif = "0.17"

@@ -41,10 +41,15 @@ pub struct Region {
 pub const FOOTER_MAGIC: [u8; 8] = *b"RUST_ENC";
 
 /// Current footer version.
-pub const FOOTER_VERSION: u8 = 1;
+pub const FOOTER_VERSION: u8 = 2;
+
+/// Footer flag: audio samples were encrypted.
+pub const FOOTER_FLAG_AUDIO: u8 = 0x01;
+/// Footer flag: metadata regions were scrubbed (irreversible).
+pub const FOOTER_FLAG_SCRUB_METADATA: u8 = 0x02;
 
 /// File footer structure stored at the end of encrypted files.
-/// Total size: 8 + 1 + 16 + 8 + 8 + 32 = 73 bytes (aligned to 80 for safety)
+/// Total size: 8 + 1 + 1 + 2 + 16 + 8 + 8 + 32 + 4 = 80 bytes
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FileFooter {
@@ -52,29 +57,44 @@ pub struct FileFooter {
     pub magic: [u8; 8],
     /// Footer format version.
     pub version: u8,
+    /// Flags describing how the file was processed.
+    pub flags: u8,
+    /// Reserved for future use.
+    pub reserved: [u8; 2],
     /// Salt used for key derivation.
     pub salt: [u8; 16],
     /// Nonce for AES-CTR (8 bytes for large file support).
     pub nonce: [u8; 8],
     /// Original file length before footer was appended.
     pub original_len: u64,
-    /// Checksum of sampled original data for verification.
-    pub checksum: [u8; 32],
+    /// Authentication tag for password/tamper verification.
+    pub auth_tag: [u8; 32],
+    /// Reserved for future use.
+    pub reserved2: [u8; 4],
 }
 
 impl FileFooter {
     /// Size of the footer in bytes.
-    pub const SIZE: usize = 73;
+    pub const SIZE: usize = 80;
 
     /// Create a new footer with the given parameters.
-    pub fn new(salt: [u8; 16], nonce: [u8; 8], original_len: u64, checksum: [u8; 32]) -> Self {
+    pub fn new(
+        flags: u8,
+        salt: [u8; 16],
+        nonce: [u8; 8],
+        original_len: u64,
+        auth_tag: [u8; 32],
+    ) -> Self {
         Self {
             magic: FOOTER_MAGIC,
             version: FOOTER_VERSION,
+            flags,
+            reserved: [0u8; 2],
             salt,
             nonce,
             original_len,
-            checksum,
+            auth_tag,
+            reserved2: [0u8; 4],
         }
     }
 
@@ -83,10 +103,13 @@ impl FileFooter {
         let mut bytes = [0u8; Self::SIZE];
         bytes[0..8].copy_from_slice(&self.magic);
         bytes[8] = self.version;
-        bytes[9..25].copy_from_slice(&self.salt);
-        bytes[25..33].copy_from_slice(&self.nonce);
-        bytes[33..41].copy_from_slice(&self.original_len.to_be_bytes());
-        bytes[41..73].copy_from_slice(&self.checksum);
+        bytes[9] = self.flags;
+        bytes[10..12].copy_from_slice(&self.reserved);
+        bytes[12..28].copy_from_slice(&self.salt);
+        bytes[28..36].copy_from_slice(&self.nonce);
+        bytes[36..44].copy_from_slice(&self.original_len.to_be_bytes());
+        bytes[44..76].copy_from_slice(&self.auth_tag);
+        bytes[76..80].copy_from_slice(&self.reserved2);
         bytes
     }
 
@@ -104,22 +127,45 @@ impl FileFooter {
         }
 
         let version = bytes[8];
+        if version != FOOTER_VERSION {
+            return Err(AppError::InvalidStructure(format!(
+                "Unsupported footer version: {}",
+                version
+            )));
+        }
+
+        let flags = bytes[9];
+        let mut reserved = [0u8; 2];
+        reserved.copy_from_slice(&bytes[10..12]);
         let mut salt = [0u8; 16];
-        salt.copy_from_slice(&bytes[9..25]);
+        salt.copy_from_slice(&bytes[12..28]);
         let mut nonce = [0u8; 8];
-        nonce.copy_from_slice(&bytes[25..33]);
-        let original_len = u64::from_be_bytes(bytes[33..41].try_into().unwrap());
-        let mut checksum = [0u8; 32];
-        checksum.copy_from_slice(&bytes[41..73]);
+        nonce.copy_from_slice(&bytes[28..36]);
+        let original_len = u64::from_be_bytes(bytes[36..44].try_into().unwrap());
+        let mut auth_tag = [0u8; 32];
+        auth_tag.copy_from_slice(&bytes[44..76]);
+        let mut reserved2 = [0u8; 4];
+        reserved2.copy_from_slice(&bytes[76..80]);
 
         Ok(Self {
             magic,
             version,
+            flags,
+            reserved,
             salt,
             nonce,
             original_len,
-            checksum,
+            auth_tag,
+            reserved2,
         })
+    }
+
+    pub fn encrypt_audio(&self) -> bool {
+        (self.flags & FOOTER_FLAG_AUDIO) != 0
+    }
+
+    pub fn scrub_metadata(&self) -> bool {
+        (self.flags & FOOTER_FLAG_SCRUB_METADATA) != 0
     }
 }
 
@@ -298,21 +344,25 @@ mod tests {
 
     #[test]
     fn test_file_footer_roundtrip() {
+        let flags = FOOTER_FLAG_AUDIO | FOOTER_FLAG_SCRUB_METADATA;
         let salt = [0x11u8; 16];
         let nonce = [0x22u8; 8];
         let original_len = 123_456_789u64;
-        let checksum = [0x33u8; 32];
+        let auth_tag = [0x33u8; 32];
 
-        let footer = FileFooter::new(salt, nonce, original_len, checksum);
+        let footer = FileFooter::new(flags, salt, nonce, original_len, auth_tag);
         let bytes = footer.to_bytes();
         let parsed = FileFooter::from_bytes(&bytes).unwrap();
 
         assert_eq!(parsed.magic, FOOTER_MAGIC);
         assert_eq!(parsed.version, FOOTER_VERSION);
+        assert_eq!(parsed.flags, flags);
         assert_eq!(parsed.salt, salt);
         assert_eq!(parsed.nonce, nonce);
         assert_eq!(parsed.original_len, original_len);
-        assert_eq!(parsed.checksum, checksum);
+        assert_eq!(parsed.auth_tag, auth_tag);
+        assert!(parsed.encrypt_audio());
+        assert!(parsed.scrub_metadata());
     }
 
     #[test]
@@ -329,5 +379,15 @@ mod tests {
 
         let err = FileFooter::from_bytes(&bytes).unwrap_err();
         assert!(matches!(err, AppError::NotEncrypted));
+    }
+
+    #[test]
+    fn test_file_footer_rejects_unsupported_version() {
+        let mut bytes = [0u8; FileFooter::SIZE];
+        bytes[0..8].copy_from_slice(&FOOTER_MAGIC);
+        bytes[8] = FOOTER_VERSION.wrapping_add(1);
+
+        let err = FileFooter::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, AppError::InvalidStructure(msg) if msg.contains("Unsupported footer version")));
     }
 }

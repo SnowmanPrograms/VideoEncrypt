@@ -1,10 +1,10 @@
 //! Integration tests for media_lock_core library.
 
 use media_lock_core::{AppError, EncryptionTask, OperationMode, ProgressHandler};
-use media_lock_core::common::FileFooter;
+use media_lock_core::common::{FileFooter, FOOTER_FLAG_AUDIO, FOOTER_FLAG_SCRUB_METADATA};
 use media_lock_core::io::{LockManager, StreamingWal};
 use std::sync::{Arc, Mutex};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::TempDir;
 
 /// Mock progress handler for testing.
@@ -127,6 +127,69 @@ fn minimal_mkv_fixture() -> (Vec<u8>, u64, usize) {
     (bytes, region_offset, region_len)
 }
 
+/// Minimal MKV fixture with both video and audio blocks.
+fn minimal_mkv_fixture_with_audio() -> (Vec<u8>, u64, usize, u64, usize) {
+    let mut bytes = Vec::new();
+
+    // EBMLHeader
+    bytes.extend_from_slice(&[0x1A, 0x45, 0xDF, 0xA3]);
+    bytes.extend_from_slice(&ebml_vint_1byte(0));
+
+    // Segment: content = Tracks (21) + Cluster (41) = 62 bytes
+    bytes.extend_from_slice(&[0x18, 0x53, 0x80, 0x67]);
+    bytes.extend_from_slice(&ebml_vint_1byte(62));
+
+    // Tracks: 2 * TrackEntry(8) = 16 bytes
+    bytes.extend_from_slice(&[0x16, 0x54, 0xAE, 0x6B]);
+    bytes.extend_from_slice(&ebml_vint_1byte(16));
+
+    // TrackEntry (video #1)
+    bytes.push(0xAE);
+    bytes.extend_from_slice(&ebml_vint_1byte(6));
+    bytes.push(0xD7);
+    bytes.extend_from_slice(&ebml_vint_1byte(1));
+    bytes.extend_from_slice(&ebml_vint_1byte(1));
+    bytes.push(0x83);
+    bytes.extend_from_slice(&ebml_vint_1byte(1));
+    bytes.push(1);
+
+    // TrackEntry (audio #2)
+    bytes.push(0xAE);
+    bytes.extend_from_slice(&ebml_vint_1byte(6));
+    bytes.push(0xD7);
+    bytes.extend_from_slice(&ebml_vint_1byte(1));
+    bytes.extend_from_slice(&ebml_vint_1byte(2));
+    bytes.push(0x83);
+    bytes.extend_from_slice(&ebml_vint_1byte(1));
+    bytes.push(2);
+
+    // Cluster: content = video SimpleBlock (22) + audio SimpleBlock (14) = 36 bytes
+    bytes.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75]);
+    bytes.extend_from_slice(&ebml_vint_1byte(36));
+
+    // Video SimpleBlock: payload = 1 + 2 + 1 + 16 = 20 bytes
+    bytes.push(0xA3);
+    bytes.extend_from_slice(&ebml_vint_1byte(20));
+    bytes.extend_from_slice(&ebml_vint_1byte(1)); // track #1
+    bytes.extend_from_slice(&[0x00, 0x00]); // timecode
+    bytes.push(0x80); // keyframe
+    let video_offset = bytes.len() as u64;
+    let video_len = 16usize;
+    bytes.extend_from_slice(&[0x42u8; 16]);
+
+    // Audio SimpleBlock: payload = 1 + 2 + 1 + 8 = 12 bytes
+    bytes.push(0xA3);
+    bytes.extend_from_slice(&ebml_vint_1byte(12));
+    bytes.extend_from_slice(&ebml_vint_1byte(2)); // track #2
+    bytes.extend_from_slice(&[0x00, 0x00]); // timecode
+    bytes.push(0x00); // flags
+    let audio_offset = bytes.len() as u64;
+    let audio_len = 8usize;
+    bytes.extend_from_slice(&[0x24u8; 8]);
+
+    (bytes, video_offset, video_len, audio_offset, audio_len)
+}
+
 fn mp4_box(box_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     let size: u32 = (8 + payload.len()) as u32;
     let mut out = Vec::with_capacity(size as usize);
@@ -223,6 +286,107 @@ fn minimal_mp4_fixture() -> (Vec<u8>, u64, usize) {
     (bytes, sample_offset, sample.len())
 }
 
+fn minimal_mp4_moov_with_metadata(chunk_offset: u32, ilst_payload: &[u8]) -> (Vec<u8>, u64, usize) {
+    let trak = {
+        // hdlr: version/flags (4) + pre_defined (4) + handler_type (4)
+        let mut hdlr_payload = Vec::new();
+        hdlr_payload.extend_from_slice(&0u32.to_be_bytes());
+        hdlr_payload.extend_from_slice(&0u32.to_be_bytes());
+        hdlr_payload.extend_from_slice(b"vide");
+        let hdlr = mp4_box(b"hdlr", &hdlr_payload);
+
+        // stss: entry_count = 1, sample #1 is sync sample
+        let mut stss_payload = Vec::new();
+        stss_payload.extend_from_slice(&0u32.to_be_bytes());
+        stss_payload.extend_from_slice(&1u32.to_be_bytes());
+        stss_payload.extend_from_slice(&1u32.to_be_bytes());
+        let stss = mp4_box(b"stss", &stss_payload);
+
+        // stsz: sample_size = 16, sample_count = 1
+        let mut stsz_payload = Vec::new();
+        stsz_payload.extend_from_slice(&0u32.to_be_bytes());
+        stsz_payload.extend_from_slice(&16u32.to_be_bytes());
+        stsz_payload.extend_from_slice(&1u32.to_be_bytes());
+        let stsz = mp4_box(b"stsz", &stsz_payload);
+
+        // stsc: 1 entry, 1 sample per chunk
+        let mut stsc_payload = Vec::new();
+        stsc_payload.extend_from_slice(&0u32.to_be_bytes());
+        stsc_payload.extend_from_slice(&1u32.to_be_bytes());
+        stsc_payload.extend_from_slice(&1u32.to_be_bytes());
+        stsc_payload.extend_from_slice(&1u32.to_be_bytes());
+        stsc_payload.extend_from_slice(&1u32.to_be_bytes());
+        let stsc = mp4_box(b"stsc", &stsc_payload);
+
+        // stco: 1 chunk offset pointing at mdat payload
+        let mut stco_payload = Vec::new();
+        stco_payload.extend_from_slice(&0u32.to_be_bytes());
+        stco_payload.extend_from_slice(&1u32.to_be_bytes());
+        stco_payload.extend_from_slice(&chunk_offset.to_be_bytes());
+        let stco = mp4_box(b"stco", &stco_payload);
+
+        let mut stbl_payload = Vec::new();
+        stbl_payload.extend_from_slice(&stss);
+        stbl_payload.extend_from_slice(&stsz);
+        stbl_payload.extend_from_slice(&stsc);
+        stbl_payload.extend_from_slice(&stco);
+        let stbl = mp4_box(b"stbl", &stbl_payload);
+
+        let minf = mp4_box(b"minf", &stbl);
+
+        let mut mdia_payload = Vec::new();
+        mdia_payload.extend_from_slice(&hdlr);
+        mdia_payload.extend_from_slice(&minf);
+        let mdia = mp4_box(b"mdia", &mdia_payload);
+
+        mp4_box(b"trak", &mdia)
+    };
+
+    let ilst = mp4_box(b"ilst", ilst_payload);
+    let meta = mp4_box(b"meta", &ilst);
+    let udta = mp4_box(b"udta", &meta);
+
+    let mut moov_payload = Vec::new();
+    moov_payload.extend_from_slice(&trak);
+    let udta_offset_in_moov_payload = moov_payload.len() as u64;
+    moov_payload.extend_from_slice(&udta);
+
+    // metadata region is the ilst payload (parser uses ilst offset + header size)
+    let meta_payload_offset_in_moov = 8 + udta_offset_in_moov_payload + 8 + 8 + 8;
+    (mp4_box(b"moov", &moov_payload), meta_payload_offset_in_moov, ilst_payload.len())
+}
+
+fn minimal_mp4_fixture_with_metadata() -> (Vec<u8>, u64, usize, u64, usize) {
+    let sample = vec![0x55u8; 16];
+    let ilst_payload = vec![0x77u8; 12];
+
+    // ftyp: "isom" + minor_version 0
+    let mut ftyp_payload = Vec::new();
+    ftyp_payload.extend_from_slice(b"isom");
+    ftyp_payload.extend_from_slice(&0u32.to_be_bytes());
+    let ftyp = mp4_box(b"ftyp", &ftyp_payload);
+
+    // Placeholder moov for sizing
+    let (moov_placeholder, _meta_offset_in_moov, _meta_len) =
+        minimal_mp4_moov_with_metadata(0, &ilst_payload);
+
+    let mdat_offset = (ftyp.len() + moov_placeholder.len()) as u64;
+    let sample_offset = mdat_offset + 8;
+
+    let (moov, meta_offset_in_moov, meta_len) =
+        minimal_mp4_moov_with_metadata(sample_offset as u32, &ilst_payload);
+
+    let mdat = mp4_box(b"mdat", &sample);
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&ftyp);
+    bytes.extend_from_slice(&moov);
+    bytes.extend_from_slice(&mdat);
+
+    let meta_offset = ftyp.len() as u64 + meta_offset_in_moov;
+    (bytes, sample_offset, sample.len(), meta_offset, meta_len)
+}
+
 #[test]
 fn test_roundtrip_encrypt_decrypt_mkv_minimal_fixture() {
     let temp_dir = TempDir::new().unwrap();
@@ -268,6 +432,58 @@ fn test_roundtrip_encrypt_decrypt_mkv_minimal_fixture() {
 }
 
 #[test]
+fn test_roundtrip_encrypt_decrypt_mkv_with_audio_enabled() {
+    let temp_dir = TempDir::new().unwrap();
+    let (original, video_offset, video_len, audio_offset, audio_len) = minimal_mkv_fixture_with_audio();
+    let path = temp_dir.path().join("fixture_audio.mkv");
+    std::fs::write(&path, &original).unwrap();
+
+    let password = "test_password_123";
+
+    // Encrypt (with audio)
+    EncryptionTask::new(path.clone(), OperationMode::Encrypt)
+        .with_password(password.to_string())
+        .with_audio(true)
+        .run()
+        .unwrap();
+
+    assert_lock_and_wal_clean(&path);
+
+    let encrypted = std::fs::read(&path).unwrap();
+    assert_eq!(encrypted.len(), original.len() + FileFooter::SIZE);
+
+    let footer = FileFooter::from_bytes(&encrypted[encrypted.len() - FileFooter::SIZE..]).unwrap();
+    assert_eq!(footer.original_len, original.len() as u64);
+    assert!(footer.encrypt_audio());
+    assert!((footer.flags & FOOTER_FLAG_AUDIO) != 0);
+    assert!(!footer.scrub_metadata());
+    assert!((footer.flags & FOOTER_FLAG_SCRUB_METADATA) == 0);
+
+    assert_ne!(
+        &encrypted[video_offset as usize..video_offset as usize + video_len],
+        &original[video_offset as usize..video_offset as usize + video_len],
+        "Video region bytes should change after encryption"
+    );
+
+    assert_ne!(
+        &encrypted[audio_offset as usize..audio_offset as usize + audio_len],
+        &original[audio_offset as usize..audio_offset as usize + audio_len],
+        "Audio region bytes should change after encryption"
+    );
+
+    // Decrypt (workflow reads flags from footer)
+    EncryptionTask::new(path.clone(), OperationMode::Decrypt)
+        .with_password(password.to_string())
+        .run()
+        .unwrap();
+
+    assert_lock_and_wal_clean(&path);
+
+    let decrypted = std::fs::read(&path).unwrap();
+    assert_eq!(decrypted, original);
+}
+
+#[test]
 fn test_roundtrip_encrypt_decrypt_mp4_minimal_fixture() {
     let temp_dir = TempDir::new().unwrap();
     let (original, region_offset, region_len) = minimal_mp4_fixture();
@@ -306,6 +522,107 @@ fn test_roundtrip_encrypt_decrypt_mp4_minimal_fixture() {
 
     let decrypted = std::fs::read(&path).unwrap();
     assert_eq!(decrypted, original);
+}
+
+#[test]
+fn test_scrub_metadata_is_irreversible_but_safe() {
+    let temp_dir = TempDir::new().unwrap();
+    let (original, sample_offset, sample_len, meta_offset, meta_len) = minimal_mp4_fixture_with_metadata();
+    let path = temp_dir.path().join("fixture_meta.mp4");
+    std::fs::write(&path, &original).unwrap();
+
+    let password = "test_password_123";
+
+    // Encrypt with scrub_metadata enabled
+    EncryptionTask::new(path.clone(), OperationMode::Encrypt)
+        .with_password(password.to_string())
+        .with_metadata_scrub(true)
+        .run()
+        .unwrap();
+
+    assert_lock_and_wal_clean(&path);
+
+    let encrypted = std::fs::read(&path).unwrap();
+    let footer = FileFooter::from_bytes(&encrypted[encrypted.len() - FileFooter::SIZE..]).unwrap();
+    assert!(footer.scrub_metadata());
+    assert!((footer.flags & FOOTER_FLAG_SCRUB_METADATA) != 0);
+
+    let meta_start = meta_offset as usize;
+    let meta_end = meta_start + meta_len;
+    assert!(encrypted[meta_start..meta_end].iter().all(|&b| b == 0x20));
+
+    let sample_start = sample_offset as usize;
+    let sample_end = sample_start + sample_len;
+    assert_ne!(&encrypted[sample_start..sample_end], &original[sample_start..sample_end]);
+
+    // Decrypt: video restores, metadata stays scrubbed (spaces)
+    EncryptionTask::new(path.clone(), OperationMode::Decrypt)
+        .with_password(password.to_string())
+        .run()
+        .unwrap();
+
+    assert_lock_and_wal_clean(&path);
+
+    let decrypted = std::fs::read(&path).unwrap();
+    assert_eq!(decrypted.len(), original.len());
+    assert_eq!(&decrypted[sample_start..sample_end], &original[sample_start..sample_end]);
+    assert!(decrypted[meta_start..meta_end].iter().all(|&b| b == 0x20));
+    assert_ne!(decrypted, original);
+}
+
+#[test]
+fn test_decrypt_wrong_password_does_not_modify_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let (original, _region_offset, _region_len) = minimal_mp4_fixture();
+    let path = temp_dir.path().join("fixture_wrong_pwd.mp4");
+    std::fs::write(&path, &original).unwrap();
+
+    let correct = "correct_password";
+    EncryptionTask::new(path.clone(), OperationMode::Encrypt)
+        .with_password(correct.to_string())
+        .run()
+        .unwrap();
+
+    let encrypted_before = std::fs::read(&path).unwrap();
+
+    let err = EncryptionTask::new(path.clone(), OperationMode::Decrypt)
+        .with_password("wrong_password".to_string())
+        .run()
+        .unwrap_err();
+
+    assert!(matches!(err, AppError::AuthenticationFailed));
+    assert_lock_and_wal_clean(&path);
+
+    let encrypted_after = std::fs::read(&path).unwrap();
+    assert_eq!(encrypted_after, encrypted_before);
+}
+
+#[test]
+fn test_decrypt_wrong_password_no_wal_does_not_modify_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let (original, _region_offset, _region_len) = minimal_mp4_fixture();
+    let path = temp_dir.path().join("fixture_wrong_pwd_no_wal.mp4");
+    std::fs::write(&path, &original).unwrap();
+
+    let correct = "correct_password";
+    EncryptionTask::new(path.clone(), OperationMode::Encrypt)
+        .with_password(correct.to_string())
+        .run()
+        .unwrap();
+
+    let encrypted_before = std::fs::read(&path).unwrap();
+
+    let err = EncryptionTask::new(path.clone(), OperationMode::Decrypt)
+        .with_password("wrong_password".to_string())
+        .with_no_wal(true)
+        .run()
+        .unwrap_err();
+
+    assert!(matches!(err, AppError::AuthenticationFailed));
+    assert_lock_and_wal_clean(&path);
+
+    let encrypted_after = std::fs::read(&path).unwrap();
+    assert_eq!(encrypted_after, encrypted_before);
 }
 
 #[test]
@@ -349,13 +666,17 @@ fn test_decrypt_unencrypted_fails_with_not_encrypted() {
 
 #[test]
 fn test_encrypt_nonexistent_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let missing = temp_dir.path().join("missing.mp4");
+
     let handler = MockHandler::new();
-    let task = EncryptionTask::new(PathBuf::from("nonexistent_file.mp4"), OperationMode::Encrypt)
+    let task = EncryptionTask::new(missing.clone(), OperationMode::Encrypt)
         .with_password("test".to_string())
         .with_handler(handler);
 
     let result = task.run();
     assert!(matches!(result, Err(AppError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound));
+    assert_lock_and_wal_clean(&missing);
 }
 
 #[test]

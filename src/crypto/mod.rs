@@ -6,4 +6,4 @@ mod engine;
 mod key_deriv;
 
 pub use engine::CryptoEngine;
-pub use key_deriv::{derive_key, generate_nonce, generate_salt};
+pub use key_deriv::{derive_key, derive_keys, generate_nonce, generate_salt, DerivedKeys};
