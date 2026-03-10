@@ -291,3 +291,43 @@ impl EncryptionTask {
         crate::workflow::run_task(&self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_footer_roundtrip() {
+        let salt = [0x11u8; 16];
+        let nonce = [0x22u8; 8];
+        let original_len = 123_456_789u64;
+        let checksum = [0x33u8; 32];
+
+        let footer = FileFooter::new(salt, nonce, original_len, checksum);
+        let bytes = footer.to_bytes();
+        let parsed = FileFooter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(parsed.magic, FOOTER_MAGIC);
+        assert_eq!(parsed.version, FOOTER_VERSION);
+        assert_eq!(parsed.salt, salt);
+        assert_eq!(parsed.nonce, nonce);
+        assert_eq!(parsed.original_len, original_len);
+        assert_eq!(parsed.checksum, checksum);
+    }
+
+    #[test]
+    fn test_file_footer_rejects_short_buffer() {
+        let err = FileFooter::from_bytes(&[0u8; FileFooter::SIZE - 1]).unwrap_err();
+        assert!(matches!(err, AppError::InvalidStructure(msg) if msg.contains("Footer too short")));
+    }
+
+    #[test]
+    fn test_file_footer_rejects_bad_magic() {
+        let mut bytes = [0u8; FileFooter::SIZE];
+        bytes[0..8].copy_from_slice(b"NOT_ENC!");
+        bytes[8] = FOOTER_VERSION;
+
+        let err = FileFooter::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, AppError::NotEncrypted));
+    }
+}

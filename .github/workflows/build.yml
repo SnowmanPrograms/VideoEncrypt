@@ -28,7 +28,7 @@ jobs:
         toolchain: ${{ matrix.rust }}
 
     - name: Run tests
-      run: cargo test --verbose --lib --bin media-lock-cli
+      run: cargo test --verbose --all-targets
 
   build-cli:
     name: Build CLI
