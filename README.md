@@ -92,6 +92,9 @@ media-lock encrypt /path/to/videos -p yourpassword
 
 # Recursively encrypt all media files
 media-lock encrypt /path/to/videos -p yourpassword --recursive
+
+# Tune batch pipeline (parsing+KDF vs I/O)
+media-lock encrypt /path/to/videos -p yourpassword --recursive --jobs 4 --queue 5
 ```
 
 #### Recover from Interrupted Session
@@ -283,6 +286,7 @@ Performance characteristics:
 - **Throughput scales with disk speed**: I/O bound for most operations
 - **Memory efficient**: Constant memory usage regardless of file size
 - **Scalable**: Works efficiently with multi-GB files
+- **Pipelined batch mode**: Overlaps parsing+KDF (`--jobs`) with I/O, buffered by `--queue`
 
 ## Security Design
 
@@ -331,6 +335,8 @@ Offset  Size    Field
 | `--scrub-metadata` | | Scrub sensitive metadata | false |
 | `--recursive` | `-r` | Process directory recursively | false |
 | `--no-wal` | | Disable WAL (faster but unsafe) | false |
+| `--jobs` | | Parallel planning workers (parsing + KDF, batch mode) | auto (≤4) |
+| `--queue` | | Max planned tasks buffered ahead of I/O (batch mode) | 5 |
 
 ### Performance vs Safety
 

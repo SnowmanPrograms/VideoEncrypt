@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use media_lock_core::{AppError, EncryptionTask, OperationMode, ProgressHandler, TaskStats, run_task_with_stats};
+use media_lock_core::workflow::{execute_task_plan, plan_task, PlannedTask};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,6 +17,12 @@ use media_lock_core::t;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+fn default_planner_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| std::cmp::min(n.get(), 4))
+        .unwrap_or(1)
 }
 
 #[derive(Subcommand)]
@@ -45,6 +52,14 @@ enum Commands {
         /// Disable WAL for faster (but unsafe) operation
         #[arg(long)]
         no_wal: bool,
+
+        /// Parallel planning workers (parsing + KDF)
+        #[arg(long, default_value_t = default_planner_jobs())]
+        jobs: usize,
+
+        /// Max planned tasks buffered ahead of I/O
+        #[arg(long, default_value_t = 5)]
+        queue: usize,
     },
 
     /// Decrypt media files
@@ -64,6 +79,14 @@ enum Commands {
         /// Disable WAL for faster (but unsafe) operation
         #[arg(long)]
         no_wal: bool,
+
+        /// Parallel planning workers (parsing + KDF)
+        #[arg(long, default_value_t = default_planner_jobs())]
+        jobs: usize,
+
+        /// Max planned tasks buffered ahead of I/O
+        #[arg(long, default_value_t = 5)]
+        queue: usize,
     },
 
     /// Recover from an interrupted session
@@ -228,23 +251,137 @@ fn process_file(file_path: PathBuf, mode: OperationMode, password: String, encry
 
     match run_task_with_stats(&task) {
         Ok(stats) => {
-            let mode_str = if no_wal {
-                match mode {
-                    OperationMode::Encrypt => "Encrypt (I-Frame Only, No-WAL)",
-                    OperationMode::Decrypt => "Decrypt (No-WAL)",
-                    OperationMode::Recover => "Recover",
-                }
-            } else {
-                match mode {
-                    OperationMode::Encrypt => "Encrypt (I-Frame Only)",
-                    OperationMode::Decrypt => "Decrypt",
-                    OperationMode::Recover => "Recover",
-                }
-            };
+            let mode_str = mode_string(mode, no_wal);
             print_stats(&stats, &file_path, mode_str);
             println!("{} (Time: {})", t!("success_msg"), format_duration(start_time.elapsed()));
         }
         Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
+    }
+}
+
+fn mode_string(mode: OperationMode, no_wal: bool) -> &'static str {
+    if no_wal {
+        match mode {
+            OperationMode::Encrypt => "Encrypt (I-Frame Only, No-WAL)",
+            OperationMode::Decrypt => "Decrypt (No-WAL)",
+            OperationMode::Recover => "Recover",
+        }
+    } else {
+        match mode {
+            OperationMode::Encrypt => "Encrypt (I-Frame Only)",
+            OperationMode::Decrypt => "Decrypt",
+            OperationMode::Recover => "Recover",
+        }
+    }
+}
+
+fn process_files_pipelined(
+    files: Vec<PathBuf>,
+    mode: OperationMode,
+    password: Option<String>,
+    encrypt_audio: bool,
+    scrub_metadata: bool,
+    no_wal: bool,
+    jobs: usize,
+    queue: usize,
+) {
+    use std::sync::mpsc;
+    use std::thread;
+
+    let mut tasks: Vec<EncryptionTask> = Vec::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
+
+    for file_path in files {
+        let pwd = password.clone().unwrap_or_else(|| {
+            rpassword::prompt_password(t!("enter_password_prompt")).unwrap_or_default()
+        });
+
+        if pwd.is_empty() {
+            eprintln!("{} Password cannot be empty", t!("error_prefix"));
+            continue;
+        }
+
+        let mut task = EncryptionTask::new(file_path.clone(), mode)
+            .with_password(pwd)
+            .with_no_wal(no_wal);
+
+        if mode == OperationMode::Encrypt {
+            task = task.with_audio(encrypt_audio).with_metadata_scrub(scrub_metadata);
+        }
+
+        tasks.push(task);
+        paths.push(file_path);
+    }
+
+    if tasks.is_empty() {
+        return;
+    }
+
+    let planner_jobs = std::cmp::max(1, std::cmp::min(jobs, tasks.len()));
+    let queue_capacity = std::cmp::max(1, queue);
+
+    let (tx, rx) = mpsc::sync_channel::<(usize, Result<PlannedTask, AppError>)>(queue_capacity);
+
+    let mut buckets: Vec<Vec<(usize, EncryptionTask)>> =
+        std::iter::repeat_with(Vec::new).take(planner_jobs).collect();
+    for (idx, task) in tasks.into_iter().enumerate() {
+        buckets[idx % planner_jobs].push((idx, task));
+    }
+
+    let mut handles = Vec::new();
+    for bucket in buckets {
+        let tx = tx.clone();
+        handles.push(thread::spawn(move || {
+            for (idx, task) in bucket {
+                let planned = plan_task(&task);
+                let _ = tx.send((idx, planned));
+            }
+        }));
+    }
+    drop(tx);
+
+    let mode_str = mode_string(mode, no_wal);
+
+    for _ in 0..paths.len() {
+        let (idx, planned) = match rx.recv() {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+
+        let file_path = &paths[idx];
+
+        match planned {
+            Ok(PlannedTask::Execute(plan)) => {
+                println!("Processing: {}", file_path.display());
+                if no_wal {
+                    println!("  [WARNING] WAL disabled - unsafe mode");
+                }
+
+                let handler = CliProgress::new();
+                let plan = plan.with_handler(handler);
+
+                match execute_task_plan(plan) {
+                    Ok(stats) => {
+                        print_stats(&stats, file_path, mode_str);
+                        println!("{} (Time: {})", t!("success_msg"), format_duration(stats.total_time));
+                    }
+                    Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
+                }
+            }
+            Ok(PlannedTask::Completed(stats)) => {
+                println!("Processing: {}", file_path.display());
+                if no_wal {
+                    println!("  [WARNING] WAL disabled - unsafe mode");
+                }
+                print_stats(&stats, file_path, mode_str);
+                println!("{} (Time: {})", t!("success_msg"), format_duration(stats.total_time));
+            }
+            Err(e) => eprintln!("{} {}: {}", t!("fail_msg"), file_path.display(), e),
+        }
+    }
+
+    for handle in handles {
+        let _ = handle.join();
     }
 }
 
@@ -262,6 +399,8 @@ fn main() {
             scrub_metadata,
             recursive,
             no_wal,
+            jobs,
+            queue,
         } => {
             let files = collect_files(&path, recursive);
 
@@ -270,17 +409,18 @@ fn main() {
                 std::process::exit(1);
             }
 
-            for file_path in files {
+            if files.len() == 1 {
+                let file_path = files.into_iter().next().unwrap();
                 let pwd = password.clone().unwrap_or_else(|| {
                     rpassword::prompt_password(t!("enter_password_prompt")).unwrap_or_default()
                 });
-
                 if pwd.is_empty() {
                     eprintln!("{} Password cannot be empty", t!("error_prefix"));
-                    continue;
+                    std::process::exit(1);
                 }
-
                 process_file(file_path, OperationMode::Encrypt, pwd, encrypt_audio, scrub_metadata, no_wal);
+            } else {
+                process_files_pipelined(files, OperationMode::Encrypt, password, encrypt_audio, scrub_metadata, no_wal, jobs, queue);
             }
         }
 
@@ -289,6 +429,8 @@ fn main() {
             password,
             recursive,
             no_wal,
+            jobs,
+            queue,
         } => {
             let files = collect_files(&path, recursive);
 
@@ -297,17 +439,18 @@ fn main() {
                 std::process::exit(1);
             }
 
-            for file_path in files {
+            if files.len() == 1 {
+                let file_path = files.into_iter().next().unwrap();
                 let pwd = password.clone().unwrap_or_else(|| {
                     rpassword::prompt_password(t!("enter_password_prompt")).unwrap_or_default()
                 });
-
                 if pwd.is_empty() {
                     eprintln!("{} Password cannot be empty", t!("error_prefix"));
-                    continue;
+                    std::process::exit(1);
                 }
-
                 process_file(file_path, OperationMode::Decrypt, pwd, false, false, no_wal);
+            } else {
+                process_files_pipelined(files, OperationMode::Decrypt, password, false, false, no_wal, jobs, queue);
             }
         }
 

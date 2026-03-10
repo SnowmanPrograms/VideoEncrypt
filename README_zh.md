@@ -92,6 +92,9 @@ media-lock encrypt /path/to/videos -p yourpassword
 
 # 递归加密所有媒体文件
 media-lock encrypt /path/to/videos -p yourpassword --recursive
+
+# 调整批处理流水线（解析+KDF vs I/O）
+media-lock encrypt /path/to/videos -p yourpassword --recursive --jobs 4 --queue 5
 ```
 
 #### 从中断的会话中恢复
@@ -282,6 +285,7 @@ Media Lock 针对高性能加密进行了优化：
 - **吞吐量随磁盘速度扩展**：大多数操作为 I/O 限制
 - **内存高效**：无论文件大小如何，内存使用恒定
 - **可扩展**：高效处理多 GB 文件
+- **批处理流水线**：解析+KDF（`--jobs`）与 I/O 重叠，使用 `--queue` 限制缓冲
 
 ## 安全设计
 
@@ -330,6 +334,8 @@ Media Lock 针对高性能加密进行了优化：
 | `--scrub-metadata` | | 清除敏感元数据 | false |
 | `--recursive` | `-r` | 递归处理目录 | false |
 | `--no-wal` | | 禁用 WAL（更快但不安全） | false |
+| `--jobs` | | 并行规划线程数（解析 + KDF，仅批处理生效） | 自动（≤4） |
+| `--queue` | | I/O 前可领先的规划任务数（仅批处理生效） | 5 |
 
 ### 性能与安全
 

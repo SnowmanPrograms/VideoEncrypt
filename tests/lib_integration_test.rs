@@ -3,6 +3,7 @@
 use media_lock_core::{AppError, EncryptionTask, OperationMode, ProgressHandler};
 use media_lock_core::common::{FileFooter, FOOTER_FLAG_AUDIO, FOOTER_FLAG_SCRUB_METADATA};
 use media_lock_core::io::{LockManager, StreamingWal};
+use media_lock_core::workflow::{execute_task_plan, plan_task, PlannedTask};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 use tempfile::TempDir;
@@ -707,4 +708,121 @@ fn test_handler_callbacks() {
     assert!(log[1].contains("on_progress"));
     assert!(log[2].contains("on_message"));
     assert!(log[3].contains("on_finish"));
+}
+
+#[test]
+fn test_plan_execute_allows_handler_attached_late() {
+    let temp_dir = TempDir::new().unwrap();
+    let (original, region_offset, region_len) = minimal_mp4_fixture();
+    let path = temp_dir.path().join("fixture_plan_execute.mp4");
+    std::fs::write(&path, &original).unwrap();
+
+    let task = EncryptionTask::new(path.clone(), OperationMode::Encrypt)
+        .with_password("test_password_123".to_string());
+
+    let planned = plan_task(&task).unwrap();
+    let plan = match planned {
+        PlannedTask::Execute(plan) => plan,
+        PlannedTask::Completed(_) => panic!("expected an executable plan"),
+    };
+
+    assert!(LockManager::is_locked(&path), "Planning should hold the file lock");
+
+    // Handler is attached only for the execution stage (like CLI batch pipeline).
+    let handler = MockHandler::new();
+    let plan = plan.with_handler(handler.clone());
+
+    execute_task_plan(plan).unwrap();
+
+    assert_lock_and_wal_clean(&path);
+
+    let log = handler.get_log();
+    let start_count = log.iter().filter(|s| s.starts_with("on_start:")).count();
+    let finish_count = log.iter().filter(|s| s.as_str() == "on_finish").count();
+    assert_eq!(start_count, 1, "on_start should be called exactly once");
+    assert_eq!(finish_count, 1, "on_finish should be called exactly once");
+    assert!(
+        log.iter().any(|s| s.starts_with("on_progress:")),
+        "Expected progress callbacks during execution"
+    );
+
+    let encrypted = std::fs::read(&path).unwrap();
+    let start = region_offset as usize;
+    let end = start + region_len;
+    assert_ne!(&encrypted[start..end], &original[start..end], "Region should be modified");
+
+    // Footer should be present after encryption.
+    let footer_start = encrypted.len() - FileFooter::SIZE;
+    FileFooter::from_bytes(&encrypted[footer_start..]).unwrap();
+}
+
+#[test]
+fn test_execute_rejects_file_size_change_since_planning() {
+    use std::io::Write;
+
+    let temp_dir = TempDir::new().unwrap();
+    let (original, _region_offset, _region_len) = minimal_mp4_fixture();
+    let path = temp_dir.path().join("fixture_size_change.mp4");
+    std::fs::write(&path, &original).unwrap();
+
+    let task = EncryptionTask::new(path.clone(), OperationMode::Encrypt)
+        .with_password("test_password_123".to_string());
+
+    let planned = plan_task(&task).unwrap();
+    let plan = match planned {
+        PlannedTask::Execute(plan) => plan,
+        PlannedTask::Completed(_) => panic!("expected an executable plan"),
+    };
+
+    // Tamper with file size between plan and execution.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    f.write_all(b"X").unwrap();
+    f.sync_all().unwrap();
+
+    let err = execute_task_plan(plan).unwrap_err();
+    assert!(
+        matches!(err, AppError::InvalidStructure(ref msg) if msg.contains("File size changed since planning")),
+        "Expected stale plan error, got: {err:?}"
+    );
+
+    assert_lock_and_wal_clean(&path);
+}
+
+#[test]
+fn test_execute_rejects_footer_change_since_planning_decrypt() {
+    let temp_dir = TempDir::new().unwrap();
+    let (original, _region_offset, _region_len) = minimal_mp4_fixture();
+    let path = temp_dir.path().join("fixture_footer_change.mp4");
+    std::fs::write(&path, &original).unwrap();
+
+    let password = "test_password_123";
+
+    EncryptionTask::new(path.clone(), OperationMode::Encrypt)
+        .with_password(password.to_string())
+        .run()
+        .unwrap();
+
+    let decrypt = EncryptionTask::new(path.clone(), OperationMode::Decrypt)
+        .with_password(password.to_string());
+
+    let planned = plan_task(&decrypt).unwrap();
+    let plan = match planned {
+        PlannedTask::Execute(plan) => plan,
+        PlannedTask::Completed(_) => panic!("expected an executable plan"),
+    };
+
+    // Tamper with a checked footer field while the plan is pending.
+    let mut bytes = std::fs::read(&path).unwrap();
+    let footer_start = bytes.len() - FileFooter::SIZE;
+    let flags_offset = footer_start + 9;
+    bytes[flags_offset] ^= 0x01;
+    std::fs::write(&path, &bytes).unwrap();
+
+    let err = execute_task_plan(plan).unwrap_err();
+    assert!(
+        matches!(err, AppError::InvalidStructure(ref msg) if msg.contains("Footer changed since planning")),
+        "Expected stale footer error, got: {err:?}"
+    );
+
+    assert_lock_and_wal_clean(&path);
 }

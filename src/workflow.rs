@@ -87,6 +87,59 @@ impl TaskStats {
     }
 }
 
+/// Output of the planning stage.
+///
+/// Planning is CPU-heavy (container parsing + KDF) and produces a task plan that
+/// can be executed later (typically by an I/O worker).
+pub enum PlannedTask {
+    /// Task is fully planned and ready to execute.
+    Execute(TaskPlan),
+    /// Task completed during planning (e.g. recovery-only or no regions to process).
+    Completed(TaskStats),
+}
+
+/// A prepared task plan that is ready for I/O-heavy execution.
+///
+/// This struct is intentionally opaque to keep the execution details encapsulated.
+pub struct TaskPlan {
+    input_path: std::path::PathBuf,
+    operation: OperationMode,
+    no_wal: bool,
+
+    // Progress callback (optional).
+    handler: Option<std::sync::Arc<dyn ProgressHandler>>,
+    progress_started: bool,
+
+    // Planning time (for total_time without pipeline waiting).
+    planning_time: Duration,
+
+    // Precomputed work.
+    locker: LockManager,
+    regions: Vec<Region>,
+
+    // Crypto/materialized config.
+    salt: [u8; 16],
+    nonce: [u8; 8],
+    keys: crate::crypto::DerivedKeys,
+    engine: CryptoEngine,
+    footer_flags: u8,
+    expected_auth_tag: Option<[u8; 32]>,
+    original_len: u64,
+    effective_scrub_metadata: bool,
+
+    // Stats accumulated during planning.
+    stats: TaskStats,
+}
+
+impl TaskPlan {
+    /// Attach/replace a progress handler for the execution stage.
+    pub fn with_handler(mut self, handler: std::sync::Arc<dyn ProgressHandler>) -> Self {
+        self.handler = Some(handler);
+        self.progress_started = false;
+        self
+    }
+}
+
 /// Execute the encryption/decryption task and return stats.
 pub fn run_task(task: &EncryptionTask) -> Result<()> {
     let _ = run_task_with_stats(task)?;
@@ -95,9 +148,17 @@ pub fn run_task(task: &EncryptionTask) -> Result<()> {
 
 /// Execute the encryption/decryption task and return detailed stats.
 pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
-    let total_start = Instant::now();
+    match plan_task(task)? {
+        PlannedTask::Completed(stats) => Ok(stats),
+        PlannedTask::Execute(plan) => execute_task_plan(plan),
+    }
+}
+
+/// Plan a task (CPU-heavy) and return either a ready-to-execute plan or a completed result.
+pub fn plan_task(task: &EncryptionTask) -> Result<PlannedTask> {
+    let planning_start = Instant::now();
     let mut stats = TaskStats::default();
-    
+
     let path = &task.input_path;
     let handler: &dyn ProgressHandler = task
         .handler
@@ -105,53 +166,46 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         .map(|h| h.as_ref())
         .unwrap_or(&NoOpProgress);
 
-    // Get file size
     stats.file_size = std::fs::metadata(path)?.len();
 
-    // 1. Initial checks
     handler.on_message(t!("status_checking"));
 
-    // Check 1: File lock
-    let mut locker = LockManager::acquire(path, task.config.operation)?;
+    // Acquire lock early and keep it for the whole plan+execute lifecycle (safety).
+    let locker = LockManager::acquire(path, task.config.operation)?;
 
-    // Check 2: Disaster recovery (if WAL exists)
+    // WAL recovery check (if WAL exists)
     if StreamingWal::needs_recovery(path) {
         if task.config.operation != OperationMode::Recover {
             return Err(AppError::PreviousSessionFailed);
         }
         handler.on_message(t!("status_recovering"));
         StreamingWal::recover(path)?;
-        if task.config.operation == OperationMode::Recover {
-            locker.release()?;
-            handler.on_finish();
-            stats.total_time = total_start.elapsed();
-            return Ok(stats);
-        }
+        locker.release()?;
+        handler.on_finish();
+        stats.total_time = planning_start.elapsed();
+        return Ok(PlannedTask::Completed(stats));
     }
 
     if task.config.operation == OperationMode::Recover {
         locker.release()?;
         handler.on_finish();
-        stats.total_time = total_start.elapsed();
-        return Ok(stats);
+        stats.total_time = planning_start.elapsed();
+        return Ok(PlannedTask::Completed(stats));
     }
 
-    // Get password
     let password = task
         .config
         .password
         .as_ref()
         .ok_or(AppError::InvalidPassword)?;
 
-    // 2. Open file and detect state
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-
-    // Check 3: Magic header check
-    let file_state = detect_file_state(&mut file)?;
-    validate_state(file_state, task.config.operation)?;
+    // Detect encrypted state / footer (read-only)
+    let mut state_file = File::open(path)?;
+    let is_encrypted = detect_file_state(&mut state_file)?;
+    validate_state(is_encrypted, task.config.operation)?;
 
     let footer = match task.config.operation {
-        OperationMode::Decrypt => Some(read_footer(&mut file)?),
+        OperationMode::Decrypt => Some(read_footer(&mut state_file)?),
         OperationMode::Encrypt => None,
         OperationMode::Recover => None,
     };
@@ -165,9 +219,9 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         OperationMode::Recover => unreachable!(),
     };
 
-    // 3. Parse structure
     handler.on_message(t!("status_analyzing"));
 
+    // Parse structure (CPU-heavy)
     let parse_start = Instant::now();
     let file_for_parsing = File::open(path)?;
     let mut reader = BufReader::new(file_for_parsing);
@@ -179,10 +233,8 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     )?;
     stats.parse_time = parse_start.elapsed();
 
-    // Sort regions by offset for deterministic processing/MAC.
     regions.sort_by_key(|r| r.offset);
 
-    // Count region types
     for region in &regions {
         match region.kind {
             RegionKind::VideoIFrame => stats.iframe_count += 1,
@@ -197,20 +249,22 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         if task.config.operation == OperationMode::Encrypt {
             locker.release()?;
             handler.on_finish();
-            stats.total_time = total_start.elapsed();
-            return Ok(stats);
+            stats.total_time = planning_start.elapsed();
+            return Ok(PlannedTask::Completed(stats));
         }
         return Err(AppError::InvalidStructure(msg.to_string()));
     }
 
-    // 4. Calculate total work
     let total_bytes: u64 = regions.iter().map(|r| r.len as u64).sum();
     stats.data_size = total_bytes;
-    handler.on_start(total_bytes, t!("status_processing"));
 
-    // 5. Setup crypto (KDF)
+    // In the single-task flow we start progress as soon as total bytes are known.
+    handler.on_start(total_bytes, t!("status_processing"));
+    let progress_started = task.handler.is_some();
+
+    // KDF (CPU/memory-heavy)
     let kdf_start = Instant::now();
-    let (salt, nonce, keys, engine, footer_flags, expected_auth_tag, original_len, scrub_metadata) =
+    let (salt, nonce, keys, engine, footer_flags, expected_auth_tag, original_len, effective_scrub_metadata) =
         match task.config.operation {
             OperationMode::Encrypt => {
                 let salt = generate_salt();
@@ -226,7 +280,16 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
                     flags |= FOOTER_FLAG_SCRUB_METADATA;
                 }
 
-                (salt, nonce, keys, engine, flags, None, stats.file_size, task.config.scrub_metadata)
+                (
+                    salt,
+                    nonce,
+                    keys,
+                    engine,
+                    flags,
+                    None,
+                    stats.file_size,
+                    task.config.scrub_metadata,
+                )
             }
             OperationMode::Decrypt => {
                 let footer = footer.as_ref().ok_or(AppError::NotEncrypted)?;
@@ -247,18 +310,102 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         };
     stats.kdf_time = kdf_start.elapsed();
 
-    let use_wal = !task.config.no_wal;
+    Ok(PlannedTask::Execute(TaskPlan {
+        input_path: task.input_path.clone(),
+        operation: task.config.operation,
+        no_wal: task.config.no_wal,
+        handler: task.handler.clone(),
+        progress_started,
+        planning_time: planning_start.elapsed(),
+        locker,
+        regions,
+        salt,
+        nonce,
+        keys,
+        engine,
+        footer_flags,
+        expected_auth_tag,
+        original_len,
+        effective_scrub_metadata,
+        stats,
+    }))
+}
+
+/// Execute a previously planned task plan (I/O-heavy).
+pub fn execute_task_plan(plan: TaskPlan) -> Result<TaskStats> {
+    let exec_start = Instant::now();
+
+    let TaskPlan {
+        input_path,
+        operation,
+        no_wal,
+        handler,
+        progress_started,
+        planning_time,
+        mut locker,
+        regions,
+        salt,
+        nonce,
+        keys,
+        engine,
+        footer_flags,
+        expected_auth_tag,
+        original_len,
+        effective_scrub_metadata,
+        mut stats,
+    } = plan;
+
+    let handler: &dyn ProgressHandler = handler
+        .as_ref()
+        .map(|h| h.as_ref())
+        .unwrap_or(&NoOpProgress);
+
+    // If planning was done without a handler, start progress now.
+    if !progress_started {
+        handler.on_start(stats.data_size, t!("status_processing"));
+    }
+
+    // Open file for in-place modification.
+    let mut file = OpenOptions::new().read(true).write(true).open(&input_path)?;
+
+    // Basic consistency checks to reduce the chance of executing a stale plan.
+    let current_len = file.seek(SeekFrom::End(0))?;
+    if current_len != stats.file_size {
+        return Err(AppError::InvalidStructure(format!(
+            "File size changed since planning: expected {}, got {}",
+            stats.file_size, current_len
+        )));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let current_state = detect_file_state(&mut file)?;
+    validate_state(current_state, operation)?;
+
+    if operation == OperationMode::Decrypt {
+        let footer = read_footer(&mut file)?;
+        if footer.flags != footer_flags
+            || footer.salt != salt
+            || footer.nonce != nonce
+            || footer.original_len != original_len
+            || expected_auth_tag != Some(footer.auth_tag)
+        {
+            return Err(AppError::InvalidStructure(
+                "Footer changed since planning".to_string(),
+            ));
+        }
+    }
+
+    let use_wal = !no_wal;
 
     // =========================================================================
-    // PHASE 1: Verify auth tag (Decrypt) and/or create WAL backup (sequential write, 1 sync)
+    // PHASE 1: Verify auth tag (Decrypt) and/or create WAL backup
     // =========================================================================
     let mut buffer = vec![0u8; 4 * 1024 * 1024]; // 4MB buffer like Go
 
-    match task.config.operation {
+    match operation {
         OperationMode::Encrypt => {
             if use_wal {
                 let wal_start = Instant::now();
-                let mut wal = StreamingWal::create(path)?;
+                let mut wal = StreamingWal::create(&input_path)?;
 
                 for region in &regions {
                     wal.append_region(&mut file, region)?;
@@ -277,7 +424,7 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
 
             if use_wal {
                 let wal_start = Instant::now();
-                let mut wal = StreamingWal::create(path)?;
+                let mut wal = StreamingWal::create(&input_path)?;
 
                 for region in &regions {
                     auth_mac_update_region(&mut mac, region);
@@ -289,7 +436,7 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
                 let computed_tag = auth_mac_finalize(mac);
                 if computed_tag != expected_tag {
                     drop(wal);
-                    let _ = StreamingWal::cleanup(path);
+                    let _ = StreamingWal::cleanup(&input_path);
                     return Err(AppError::AuthenticationFailed);
                 }
 
@@ -325,10 +472,9 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
     locker.update_stage(ProcessStage::Processing { current_offset: 0 })?;
 
     // =========================================================================
-    // PHASE 2: In-place encryption using Go-style pattern
-    // read -> encrypt -> seek_back -> write (per region)
+    // PHASE 2: In-place processing (read -> encrypt -> seek_back -> write)
     // =========================================================================
-    let mut auth_mac = match task.config.operation {
+    let mut auth_mac = match operation {
         OperationMode::Encrypt => Some(auth_mac_init(&keys.mac_key, footer_flags, &salt, &nonce, original_len)?),
         OperationMode::Decrypt => None,
         OperationMode::Recover => None,
@@ -339,58 +485,55 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
             auth_mac_update_region(mac, region);
         }
 
-        // Seek to region start
         file.seek(SeekFrom::Start(region.offset))?;
-        
+
         let mut region_processed = 0usize;
         while region_processed < region.len {
             let to_read = std::cmp::min(buffer.len(), region.len - region_processed);
-            
+
             // Read
             let io_start = Instant::now();
             file.read_exact(&mut buffer[..to_read])?;
             stats.io_time += io_start.elapsed();
-            
+
             // Encrypt in-place
             let crypto_start = Instant::now();
             engine.process_buffer(
                 &mut buffer[..to_read],
                 region.offset + region_processed as u64,
-                scrub_metadata && region.kind == RegionKind::Metadata,
+                effective_scrub_metadata && region.kind == RegionKind::Metadata,
             );
             stats.crypto_time += crypto_start.elapsed();
 
             if let Some(mac) = auth_mac.as_mut() {
                 mac.update(&buffer[..to_read]);
             }
-            
+
             // Seek back and write
             let io_start = Instant::now();
             file.seek(SeekFrom::Current(-(to_read as i64)))?;
             file.write_all(&buffer[..to_read])?;
             stats.io_time += io_start.elapsed();
-            
+
             region_processed += to_read;
         }
-        
+
         handler.on_progress(region.len as u64);
     }
 
     let auth_tag = auth_mac.map(auth_mac_finalize);
 
     // =========================================================================
-    // FINALIZATION: Single sync + cleanup
+    // FINALIZATION: Single sync + footer + cleanup
     // =========================================================================
     handler.on_message(t!("status_finalizing"));
     locker.update_stage(ProcessStage::Finalizing)?;
 
-    // Single sync for all encrypted data
     let io_start = Instant::now();
     file.sync_all()?;
     stats.io_time += io_start.elapsed();
 
-    // Append/remove footer
-    match task.config.operation {
+    match operation {
         OperationMode::Encrypt => {
             let tag = auth_tag.ok_or_else(|| AppError::Crypto("Missing authentication tag".to_string()))?;
             append_footer(&mut file, footer_flags, salt, nonce, original_len, tag)?;
@@ -401,13 +544,12 @@ pub fn run_task_with_stats(task: &EncryptionTask) -> Result<TaskStats> {
         OperationMode::Recover => {}
     }
 
-    // Cleanup WAL and release lock
     if use_wal {
-        StreamingWal::cleanup(path)?;
+        StreamingWal::cleanup(&input_path)?;
     }
     locker.release()?;
-    
-    stats.total_time = total_start.elapsed();
+
+    stats.total_time = planning_time + exec_start.elapsed();
     handler.on_finish();
 
     Ok(stats)
