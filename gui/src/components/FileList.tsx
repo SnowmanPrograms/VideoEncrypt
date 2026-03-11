@@ -10,7 +10,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { FileVideo, Lock, Unlock, Trash2, AlertCircle } from "lucide-react";
+import {
+  FileVideo,
+  Lock,
+  Unlock,
+  Trash2,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+} from "lucide-react";
 import type { FileState } from "@/types";
 
 function FileStateIcon({ state }: { state: FileState }) {
@@ -45,6 +54,9 @@ export function FileList() {
   const files = useAppStore((state) => state.files);
   const removeFile = useAppStore((state) => state.removeFile);
   const clearFiles = useAppStore((state) => state.clearFiles);
+  const currentTask = useAppStore((state) => state.currentTask);
+  const progress = useAppStore((state) => state.progress);
+  const isProcessing = useAppStore((state) => state.isProcessing);
 
   if (files.length === 0) {
     return (
@@ -72,15 +84,23 @@ export function FileList() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-8"></TableHead>
-              <TableHead>文件名</TableHead>
-              <TableHead className="w-20">大小</TableHead>
-              <TableHead className="w-24">状态</TableHead>
+              <TableHead>{t("file.columns.name")}</TableHead>
+              <TableHead className="w-20">{t("file.columns.size")}</TableHead>
+              <TableHead className="w-24">{t("file.columns.state")}</TableHead>
+              <TableHead className="w-28">{t("file.columns.task")}</TableHead>
               <TableHead className="w-10"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {files.map((file) => (
-              <TableRow key={file.path}>
+              <TableRow
+                key={file.path}
+                className={
+                  isProcessing && progress?.current_file === file.path
+                    ? "bg-muted/30"
+                    : ""
+                }
+              >
                 <TableCell>
                   <FileVideo className="h-3.5 w-3.5 text-primary" />
                 </TableCell>
@@ -95,6 +115,57 @@ export function FileList() {
                 </TableCell>
                 <TableCell>
                   <FileStateBadge state={file.state} />
+                </TableCell>
+                <TableCell>
+                  {(() => {
+                    const result = currentTask?.results?.find(
+                      (r) => r.path === file.path
+                    );
+
+                    if (result) {
+                      return (
+                        <div className="space-y-0.5">
+                          <div
+                            className={`inline-flex items-center gap-1 text-xs font-medium ${
+                              result.success
+                                ? "text-green-600"
+                                : "text-destructive"
+                            }`}
+                          >
+                            {result.success ? (
+                              <CheckCircle2 className="h-4 w-4" />
+                            ) : (
+                              <XCircle className="h-4 w-4" />
+                            )}
+                            {result.success ? t("result.success") : t("result.failed")}
+                          </div>
+                          {!result.success && result.error && (
+                            <div className="text-[11px] text-muted-foreground truncate max-w-[12rem]">
+                              {result.error}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    const isInTask = currentTask?.config?.files?.includes(file.path);
+                    if (!isInTask) return <span className="text-xs text-muted-foreground">-</span>;
+
+                    if (isProcessing && progress?.current_file === file.path) {
+                      return (
+                        <div className="inline-flex items-center gap-1 text-xs font-medium text-primary">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {t("progress.processing")}
+                        </div>
+                      );
+                    }
+
+                    if (isProcessing) {
+                      return <span className="text-xs text-muted-foreground">{t("result.pending")}</span>;
+                    }
+
+                    return <span className="text-xs text-muted-foreground">-</span>;
+                  })()}
                 </TableCell>
                 <TableCell>
                   <Button

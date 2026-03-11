@@ -4,6 +4,7 @@ import { useI18n } from "@/stores/i18nStore";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { FileList } from "@/components/FileList";
 import { TaskConfigPanel } from "@/components/TaskConfigPanel";
+import { Toast } from "@/components/Toast";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,7 @@ function AppContent() {
 
   return (
     <div className="flex flex-col h-screen">
+      <Toast />
       <header className="border-b bg-card">
         {/* Row 1: Logo + Title + Settings */}
         <div className="flex items-center justify-between px-4 py-2 border-b">

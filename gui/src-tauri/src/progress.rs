@@ -56,6 +56,7 @@ struct ProgressState {
     total_bytes: u64,
     processed_bytes: u64,
     phase: ProgressPhase,
+    current_file: Option<String>,
     message: String,
 }
 
@@ -74,12 +75,13 @@ impl TauriProgressHandler {
         state.message = message.to_string();
         state.processed_bytes += processed_delta;
 
+        let current_file = state.current_file.clone();
         let event = ProgressEvent {
             task_id: self.task_id.clone(),
             phase,
             total_bytes: state.total_bytes,
             processed_bytes: state.processed_bytes,
-            current_file: None,
+            current_file,
             message: state.message.clone(),
             stats: None,
         };
@@ -100,7 +102,7 @@ impl TauriProgressHandler {
             phase,
             total_bytes: state.total_bytes,
             processed_bytes: state.processed_bytes,
-            current_file: None,
+            current_file: state.current_file.clone(),
             message: message.to_string(),
             stats,
         };
@@ -110,6 +112,10 @@ impl TauriProgressHandler {
 
     pub fn set_total_bytes(&self, total: u64) {
         self.state.write().total_bytes = total;
+    }
+
+    pub fn set_current_file(&self, path: Option<String>) {
+        self.state.write().current_file = path;
     }
 
     #[allow(dead_code)]

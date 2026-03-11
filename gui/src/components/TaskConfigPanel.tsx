@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { startTask } from "@/lib/tauri";
+import { getTaskStatus, startTask } from "@/lib/tauri";
 import { Lock, Unlock, Loader2 } from "lucide-react";
 
 export function TaskConfigPanel() {
@@ -25,13 +25,19 @@ export function TaskConfigPanel() {
     isProcessing,
     setIsProcessing,
     setCurrentTask,
+    setProgress,
+    hideToast,
+    showToast,
   } = useAppStore();
 
   const handleStartTask = async () => {
     if (files.length === 0 || !password) return;
     if (taskMode === "Encrypt" && password !== confirmPassword) return;
 
+    setCurrentTask(null);
     setIsProcessing(true);
+    setProgress(null);
+    hideToast();
 
     try {
       const taskId = await startTask({
@@ -43,10 +49,17 @@ export function TaskConfigPanel() {
         use_wal: useWal,
       });
 
-      setCurrentTask({ id: taskId } as any);
+      const task = await getTaskStatus(taskId);
+      setCurrentTask(task);
     } catch (e) {
       console.error("Failed to start task:", e);
       setIsProcessing(false);
+      showToast({
+        variant: "error",
+        title: i18n.progress.failed,
+        description: String(e),
+        durationMs: 8000,
+      });
     }
   };
 

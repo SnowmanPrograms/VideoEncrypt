@@ -96,8 +96,8 @@ struct RunningTask {
 
 #[derive(Default)]
 pub struct TaskManager {
-    tasks: RwLock<HashMap<String, TaskInfo>>,
-    running: RwLock<HashMap<String, RunningTask>>,
+    tasks: Arc<RwLock<HashMap<String, TaskInfo>>>,
+    running: Arc<RwLock<HashMap<String, RunningTask>>>,
 }
 
 impl TaskManager {
@@ -163,14 +163,8 @@ impl TaskManager {
         }
 
         let manager = TaskManagerRef {
-            tasks: Arc::new(RwLock::new(
-                self.tasks
-                    .read()
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            )),
-            running: Arc::new(RwLock::new(HashMap::new())),
+            tasks: self.tasks.clone(),
+            running: self.running.clone(),
         };
 
         let task_id_clone = task_id.clone();
@@ -199,11 +193,17 @@ impl TaskManager {
                     }
                 }
 
+                let phase = if matches!(e, GuiError::Cancelled) {
+                    ProgressPhase::Cancelled
+                } else {
+                    ProgressPhase::Failed
+                };
+
                 let _ = app_handle.emit(
                     "task-progress",
                     ProgressEvent {
                         task_id: task_id_clone,
-                        phase: ProgressPhase::Failed,
+                        phase,
                         total_bytes: 0,
                         processed_bytes: 0,
                         current_file: None,
@@ -284,6 +284,7 @@ impl TaskManagerRef {
                 app_handle.clone(),
                 task_id.to_string(),
             ));
+            handler.set_current_file(Some(file_path.clone()));
 
             let result = self.process_single_file(
                 file_path,
@@ -321,6 +322,32 @@ impl TaskManagerRef {
         }
 
         self.update_status(task_id, TaskStatus::Completed)?;
+        {
+            let mut tasks = self.tasks.write();
+            if let Some(task) = tasks.get_mut(task_id) {
+                task.current_file = None;
+            }
+        }
+
+        let (success_count, failure_count) = {
+            let tasks = self.tasks.read();
+            if let Some(task) = tasks.get(task_id) {
+                let success = task.results.iter().filter(|r| r.success).count();
+                let failed = task.results.len().saturating_sub(success);
+                (success, failed)
+            } else {
+                (0usize, 0usize)
+            }
+        };
+
+        let message = if failure_count == 0 {
+            "All files processed successfully".to_string()
+        } else {
+            format!(
+                "Task completed with errors: {} succeeded, {} failed",
+                success_count, failure_count
+            )
+        };
 
         let _ = app_handle.emit(
             "task-progress",
@@ -330,7 +357,7 @@ impl TaskManagerRef {
                 total_bytes: 0,
                 processed_bytes: 0,
                 current_file: None,
-                message: "All files processed successfully".to_string(),
+                message,
                 stats: None,
             },
         );
@@ -407,21 +434,31 @@ pub fn is_supported_extension(ext: &str) -> bool {
 }
 
 pub fn get_file_state(path: &PathBuf) -> std::io::Result<FileState> {
+    if media_lock_core::io::StreamingWal::wal_path_for(path).exists() {
+        return Ok(FileState::RecoveryNeeded);
+    }
+
+    if media_lock_core::io::LockManager::lock_path_for(path).exists() {
+        return Ok(FileState::Locked);
+    }
+
+    use media_lock_core::common::{FileFooter, FOOTER_MAGIC};
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
 
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
 
-    if len < 73 {
+    let footer_size = FileFooter::SIZE as u64;
+    if len < footer_size {
         return Ok(FileState::Normal);
     }
 
-    file.seek(SeekFrom::End(-73))?;
+    file.seek(SeekFrom::End(-(footer_size as i64)))?;
     let mut magic = [0u8; 8];
     file.read_exact(&mut magic)?;
 
-    if magic == *b"RUST_ENC" {
+    if magic == FOOTER_MAGIC {
         Ok(FileState::Encrypted)
     } else {
         Ok(FileState::Normal)
