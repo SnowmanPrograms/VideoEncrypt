@@ -14,10 +14,10 @@ export function useTaskProgress() {
 
   useEffect(() => {
     let disposed = false;
-    let chain = Promise.resolve();
+    let syncQueue = Promise.resolve();
 
     const enqueue = (job: () => Promise<void>) => {
-      chain = chain
+      syncQueue = syncQueue
         .then(async () => {
           if (disposed) return;
           await job();
@@ -89,12 +89,22 @@ export function useTaskProgress() {
         }
 
         if (failureCount > 0) {
-          showToast({
-            variant: "warning",
-            title: t("result.completedWithErrors"),
-            description: firstError ? `${summary} • ${firstError}` : summary,
-            durationMs: 8000,
-          });
+          const allFailed = successCount === 0 && totalFiles > 0;
+          showToast(
+            allFailed
+              ? {
+                  variant: "error",
+                  title: t("progress.failed"),
+                  description: firstError ?? summary,
+                  durationMs: 8000,
+                }
+              : {
+                  variant: "warning",
+                  title: t("result.completedWithErrors"),
+                  description: firstError ? `${summary} • ${firstError}` : summary,
+                  durationMs: 8000,
+                }
+          );
         } else {
           showToast({
             variant: "success",
@@ -136,9 +146,9 @@ export function useTaskProgress() {
 
       // Task-level end state (TaskManager emits current_file: null).
       if (
-        (progress.phase === "Completed" && !progress.current_file) ||
+        (progress.phase === "Completed" && !currentFile) ||
         progress.phase === "Cancelled" ||
-        (progress.phase === "Failed" && !progress.current_file)
+        (progress.phase === "Failed" && !currentFile)
       ) {
         setIsProcessing(false);
         enqueue(() => finalizeTask(progress.task_id));
