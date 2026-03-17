@@ -1,4 +1,5 @@
 import { useTaskProgress } from "@/hooks/useTaskProgress";
+import { useDragDrop } from "@/hooks/useDragDrop";
 import { useAppStore } from "@/stores/appStore";
 import { useI18n } from "@/stores/i18nStore";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -12,7 +13,7 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { selectFiles, selectFolder, cancelTask } from "@/lib/tauri";
 import { formatBytes } from "@/lib/utils";
-import { Lock, Unlock, FileUp, FolderOpen, X } from "lucide-react";
+import { Lock, Unlock, FileUp, FolderOpen, X, Upload } from "lucide-react";
 
 function AppContent() {
   useTaskProgress();
@@ -26,6 +27,8 @@ function AppContent() {
     currentTask,
     files,
   } = useAppStore();
+
+  const { isDragOver, dragProps } = useDragDrop();
 
   const handleSelectFiles = async () => {
     try {
@@ -125,7 +128,20 @@ function AppContent() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Main Content Area */}
-        <main className="flex-1 flex flex-col px-4 py-3 overflow-auto">
+        <main
+          className="flex-1 flex flex-col px-4 py-3 overflow-auto relative"
+          {...dragProps}
+        >
+          {isDragOver && files.length > 0 && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm pointer-events-none">
+              <div className="flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-dashed border-primary bg-card shadow-lg">
+                <Upload className="h-10 w-10 text-primary animate-bounce" />
+                <p className="text-sm font-medium text-primary">
+                  {i18n.file.dropActive}
+                </p>
+              </div>
+            </div>
+          )}
           <div className="flex-1">
             <FileList />
           </div>

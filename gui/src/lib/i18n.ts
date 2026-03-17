@@ -9,6 +9,8 @@ export const en = {
     title: "Files",
     noFiles: "No files selected",
     selectHint: "Select files or a folder to get started",
+    dropHint: "Or drag and drop files/folders here",
+    dropActive: "Drop files here to add",
     selected: "{count} file(s) selected",
     clearAll: "Clear All",
     columns: {
@@ -95,6 +97,8 @@ export const zh = {
     title: "文件",
     noFiles: "未选择文件",
     selectHint: "选择文件或文件夹开始",
+    dropHint: "或拖拽文件/文件夹到此处",
+    dropActive: "拖拽文件到此处添加",
     selected: "已选择 {count} 个文件",
     clearAll: "清空",
     columns: {

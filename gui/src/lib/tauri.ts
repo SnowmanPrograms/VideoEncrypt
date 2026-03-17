@@ -28,3 +28,10 @@ export async function checkFileStatus(path: string): Promise<FileState> {
 export function getSupportedExtensions(): string[] {
   return ["mp4", "m4v", "mov", "mkv", "webm", "m4a", "mka"];
 }
+
+export async function addDroppedFiles(
+  paths: string[],
+  recursive: boolean
+): Promise<FileInfo[]> {
+  return invoke("add_dropped_files", { paths, recursive });
+}

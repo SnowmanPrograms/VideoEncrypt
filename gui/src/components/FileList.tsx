@@ -2,6 +2,7 @@ import { useAppStore } from "@/stores/appStore";
 import { useI18n, t } from "@/stores/i18nStore";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/utils";
+import { useDragDrop } from "@/hooks/useDragDrop";
 import {
   Table,
   TableBody,
@@ -19,6 +20,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  Upload,
 } from "lucide-react";
 import type { FileState } from "@/types";
 
@@ -57,19 +59,57 @@ export function FileList() {
   const currentTask = useAppStore((state) => state.currentTask);
   const progress = useAppStore((state) => state.progress);
   const isProcessing = useAppStore((state) => state.isProcessing);
+  const i18n = useI18n((s) => s.t);
+
+  const { isDragOver, dragProps } = useDragDrop();
 
   if (files.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <FileVideo className="h-10 w-10 mb-3 opacity-50" />
-        <p className="text-sm">{t("file.noFiles")}</p>
-        <p className="text-xs">{t("file.selectHint")}</p>
+      <div
+        className={`relative flex flex-col items-center justify-center py-16 rounded-lg border-2 border-dashed transition-colors ${
+          isDragOver
+            ? "border-primary bg-primary/5"
+            : "border-muted-foreground/20 hover:border-muted-foreground/40"
+        }`}
+        {...dragProps}
+      >
+        <FileVideo
+          className={`h-10 w-10 mb-3 transition-opacity ${
+            isDragOver ? "opacity-0" : "opacity-50"
+          }`}
+        />
+        {isDragOver ? (
+          <>
+            <Upload className="h-10 w-10 mb-3 text-primary animate-bounce" />
+            <p className="text-sm font-medium text-primary">
+              {i18n.file.dropActive}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm">{i18n.file.noFiles}</p>
+            <p className="text-xs mt-1">{i18n.file.selectHint}</p>
+            <p className="text-xs mt-0.5 text-muted-foreground/60">
+              {i18n.file.dropHint}
+            </p>
+          </>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" {...dragProps}>
+      {isDragOver && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary/5 pointer-events-none">
+          <div className="flex flex-col items-center gap-2">
+            <Upload className="h-8 w-8 text-primary animate-bounce" />
+            <p className="text-sm font-medium text-primary">
+              {i18n.file.dropActive}
+            </p>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
           {t("file.selected", { count: files.length })}
@@ -79,7 +119,7 @@ export function FileList() {
         </Button>
       </div>
 
-      <div className="border rounded-lg overflow-hidden">
+      <div className="border rounded-lg overflow-hidden relative">
         <Table>
           <TableHeader>
             <TableRow>

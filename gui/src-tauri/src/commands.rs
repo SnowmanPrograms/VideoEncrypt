@@ -143,3 +143,34 @@ pub fn check_file_status(path: String) -> Result<FileState> {
     let path = PathBuf::from(path);
     task_manager::get_file_state(&path).map_err(GuiError::Io)
 }
+
+/// Accept file/folder paths from drag-and-drop and return FileInfo entries.
+/// Files with unsupported extensions are silently ignored.
+#[command]
+pub fn add_dropped_files(paths: Vec<String>, recursive: bool) -> Result<Vec<FileInfo>> {
+    let mut files = Vec::new();
+    for p in paths {
+        let path_buf = PathBuf::from(&p);
+        if path_buf.is_dir() {
+            let collected = task_manager::collect_media_files(&path_buf, recursive);
+            for mp in collected {
+                if let Ok(info) = get_file_info(&mp) {
+                    files.push(info);
+                }
+            }
+        } else if path_buf.is_file() {
+            let ext = path_buf
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let supported = ["mp4", "m4v", "mov", "mkv", "webm", "m4a", "mka"];
+            if supported.contains(&ext.as_str()) {
+                if let Ok(info) = get_file_info(&path_buf) {
+                    files.push(info);
+                }
+            }
+        }
+    }
+    Ok(files)
+}

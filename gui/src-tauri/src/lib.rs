@@ -35,6 +35,7 @@ pub fn run() {
             commands::get_task_status,
             commands::get_supported_extensions,
             commands::check_file_status,
+            commands::add_dropped_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
