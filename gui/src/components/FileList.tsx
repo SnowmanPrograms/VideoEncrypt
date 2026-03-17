@@ -2,7 +2,6 @@ import { useAppStore } from "@/stores/appStore";
 import { useI18n, t } from "@/stores/i18nStore";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/utils";
-import { useDragDrop } from "@/hooks/useDragDrop";
 import {
   Table,
   TableBody,
@@ -61,7 +60,7 @@ export function FileList() {
   const isProcessing = useAppStore((state) => state.isProcessing);
   const i18n = useI18n((s) => s.t);
 
-  const { isDragOver, dragProps } = useDragDrop();
+  const isDragOver = useAppStore((s) => s.isDragOver);
 
   if (files.length === 0) {
     return (
@@ -71,7 +70,6 @@ export function FileList() {
             ? "border-primary bg-primary/5"
             : "border-muted-foreground/20 hover:border-muted-foreground/40"
         }`}
-        {...dragProps}
       >
         <FileVideo
           className={`h-10 w-10 mb-3 transition-opacity ${
@@ -99,7 +97,7 @@ export function FileList() {
   }
 
   return (
-    <div className="space-y-2" {...dragProps}>
+    <div className="space-y-2">
       {isDragOver && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary/5 pointer-events-none">
           <div className="flex flex-col items-center gap-2">

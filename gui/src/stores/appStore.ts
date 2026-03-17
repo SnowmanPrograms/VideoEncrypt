@@ -26,6 +26,7 @@ interface AppState {
   currentTask: TaskInfo | null;
   progress: ProgressEvent | null;
   isProcessing: boolean;
+  isDragOver: boolean;
   toast: ToastMessage | null;
 
   setTheme: (theme: Theme) => void;
@@ -43,6 +44,7 @@ interface AppState {
   setCurrentTask: (task: TaskInfo | null) => void;
   setProgress: (progress: ProgressEvent | null) => void;
   setIsProcessing: (value: boolean) => void;
+  setIsDragOver: (value: boolean) => void;
   showToast: (toast: Omit<ToastMessage, "id"> & { id?: string }) => void;
   hideToast: () => void;
   reset: () => void;
@@ -62,6 +64,7 @@ export const useAppStore = create<AppState>()(
       currentTask: null,
       progress: null,
       isProcessing: false,
+      isDragOver: false,
       toast: null,
 
       setTheme: (theme) => set({ theme }),
@@ -90,6 +93,7 @@ export const useAppStore = create<AppState>()(
       setCurrentTask: (currentTask) => set({ currentTask }),
       setProgress: (progress) => set({ progress }),
       setIsProcessing: (isProcessing) => set({ isProcessing }),
+      setIsDragOver: (isDragOver) => set({ isDragOver }),
       showToast: (toast) =>
         set({
           toast: {
@@ -110,6 +114,7 @@ export const useAppStore = create<AppState>()(
           currentTask: null,
           progress: null,
           isProcessing: false,
+          isDragOver: false,
           toast: null,
         }),
     }),

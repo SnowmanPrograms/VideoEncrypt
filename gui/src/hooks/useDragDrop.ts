@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useEffect } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { addDroppedFiles } from "@/lib/tauri";
 import { useAppStore } from "@/stores/appStore";
 import { useI18n } from "@/stores/i18nStore";
@@ -20,61 +21,19 @@ interface UseDragDropReturn {
 }
 
 /**
- * Collects file paths from a drag event by recursively walking
- * directory entries via the FileSystemEntry API (webkitGetAsEntry).
+ * Hook that integrates Tauri 2 native file drop events with React drag state.
+ *
+ * Tauri 2's webview intercepts native OS file drops at the webview layer,
+ * so the HTML5 Drag and Drop API cannot receive file paths via dataTransfer.
+ * Instead, we use Tauri's `onDragDropEvent()` which provides actual file paths
+ * from the OS. HTML5 drag events are still used for immediate visual feedback.
  */
-async function collectDroppedPaths(e: React.DragEvent): Promise<string[]> {
-  const paths: string[] = [];
-
-  const items = e.dataTransfer.items;
-  if (!items || items.length === 0) return paths;
-
-  const collectFromEntry = (entry: FileSystemEntry): Promise<void> => {
-    return new Promise((resolve) => {
-      if (entry.isFile) {
-        (entry as FileSystemFileEntry).file(
-          (file: File & { path?: string }) => {
-            if (file.path) {
-              paths.push(file.path);
-            }
-            resolve();
-          },
-          () => resolve()
-        );
-      } else if (entry.isDirectory) {
-        const dirReader = (entry as FileSystemDirectoryEntry).createReader();
-        dirReader.readEntries(
-          async (entries) => {
-            for (const child of entries) {
-              await collectFromEntry(child);
-            }
-            resolve();
-          },
-          () => resolve()
-        );
-      } else {
-        resolve();
-      }
-    });
-  };
-
-  const promises: Promise<void>[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const entry = items[i]?.webkitGetAsEntry?.();
-    if (entry) {
-      promises.push(collectFromEntry(entry));
-    }
-  }
-
-  await Promise.all(promises);
-  return paths;
-}
-
 export function useDragDrop(
   options: UseDragDropOptions = {}
 ): UseDragDropReturn {
   const { disabled = false, onFilesAdded } = options;
-  const [isDragOver, setIsDragOver] = useState(false);
+  const isDragOver = useAppStore((s) => s.isDragOver);
+  const setIsDragOver = useAppStore((s) => s.setIsDragOver);
   const dragCounter = useRef(0);
   const isProcessing = useAppStore((s) => s.isProcessing);
   const addFiles = useAppStore((s) => s.addFiles);
@@ -83,23 +42,112 @@ export function useDragDrop(
 
   const effectiveDisabled = disabled || isProcessing;
 
+  // Listen to Tauri 2 native drag-and-drop events via the dedicated API.
+  // This is the only reliable way to get actual file paths in Tauri 2's webview.
+  useEffect(() => {
+    if (effectiveDisabled) {
+      dragCounter.current = 0;
+      setIsDragOver(false);
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
+
+    const setup = async () => {
+      const window = getCurrentWindow();
+      unlisten = await window.onDragDropEvent(async (event) => {
+        switch (event.payload.type) {
+          case "enter": {
+            dragCounter.current++;
+            if (dragCounter.current === 1) {
+              setIsDragOver(true);
+            }
+            break;
+          }
+          case "over": {
+            // Position updates while dragging over - no action needed
+            break;
+          }
+          case "drop": {
+            dragCounter.current = 0;
+            setIsDragOver(false);
+
+            const paths = event.payload.paths;
+            if (!paths || paths.length === 0) {
+              showToast({
+                variant: "warning",
+                title: i18n.error.noFilesSelected,
+              });
+              return;
+            }
+
+            try {
+              const fileInfos = await addDroppedFiles(paths, true);
+              if (fileInfos.length > 0) {
+                if (onFilesAdded) {
+                  onFilesAdded(fileInfos);
+                } else {
+                  addFiles(fileInfos);
+                }
+                showToast({
+                  variant: "success",
+                  title: i18n.file.selected.replace(
+                    "{count}",
+                    String(fileInfos.length)
+                  ),
+                });
+              } else {
+                showToast({
+                  variant: "warning",
+                  title: i18n.error.noFilesSelected,
+                });
+              }
+            } catch (err) {
+              console.error("Failed to process dropped files:", err);
+              showToast({
+                variant: "error",
+                title: i18n.error.noFilesSelected,
+              });
+            }
+            break;
+          }
+          case "leave": {
+            dragCounter.current--;
+            if (dragCounter.current <= 0) {
+              dragCounter.current = 0;
+              setIsDragOver(false);
+            }
+            break;
+          }
+        }
+      });
+    };
+
+    setup();
+
+    return () => {
+      unlisten?.();
+    };
+  }, [effectiveDisabled, addFiles, onFilesAdded, showToast, i18n, setIsDragOver]);
+
+  // HTML5 drag events for immediate visual feedback.
+  // These fire synchronously before the Tauri native event arrives,
+  // providing a snappier UI response.
   const handleDragEnter = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
       if (effectiveDisabled) return;
       dragCounter.current++;
       if (dragCounter.current === 1) {
         setIsDragOver(true);
       }
     },
-    [effectiveDisabled]
+    [effectiveDisabled, setIsDragOver]
   );
 
   const handleDragOver = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
       if (effectiveDisabled) {
         e.dataTransfer.dropEffect = "none";
       } else {
@@ -112,7 +160,6 @@ export function useDragDrop(
   const handleDragLeave = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
       if (effectiveDisabled) return;
       dragCounter.current--;
       if (dragCounter.current <= 0) {
@@ -120,57 +167,19 @@ export function useDragDrop(
         setIsDragOver(false);
       }
     },
-    [effectiveDisabled]
+    [effectiveDisabled, setIsDragOver]
   );
 
+  // HTML5 onDrop is intentionally a no-op for file processing.
+  // File paths are handled by the Tauri native onDragDropEvent above.
+  // We only preventDefault here to avoid the browser navigating to the file.
   const handleDrop = useCallback(
-    async (e: React.DragEvent) => {
+    (e: React.DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
       dragCounter.current = 0;
       setIsDragOver(false);
-
-      if (effectiveDisabled) return;
-
-      try {
-        const droppedPaths = await collectDroppedPaths(e);
-        if (droppedPaths.length === 0) {
-          showToast({
-            variant: "warning",
-            title: i18n.error.noFilesSelected,
-          });
-          return;
-        }
-
-        const fileInfos = await addDroppedFiles(droppedPaths, true);
-        if (fileInfos.length > 0) {
-          if (onFilesAdded) {
-            onFilesAdded(fileInfos);
-          } else {
-            addFiles(fileInfos);
-          }
-          showToast({
-            variant: "success",
-            title: i18n.file.selected.replace(
-              "{count}",
-              String(fileInfos.length)
-            ),
-          });
-        } else {
-          showToast({
-            variant: "warning",
-            title: i18n.error.noFilesSelected,
-          });
-        }
-      } catch (err) {
-        console.error("Failed to process dropped files:", err);
-        showToast({
-          variant: "error",
-          title: i18n.error.noFilesSelected,
-        });
-      }
     },
-    [effectiveDisabled, addFiles, onFilesAdded, showToast, i18n]
+    [setIsDragOver]
   );
 
   return {
